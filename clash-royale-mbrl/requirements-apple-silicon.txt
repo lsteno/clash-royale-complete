@@ -1,0 +1,39 @@
+# Clash Royale Visual-MBRL - Apple Silicon (M1/M2/M3) Requirements
+# PyTorch with MPS support
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+
+# YOLOv8 for object detection
+ultralytics>=8.1.24
+
+# Core ML/DL
+numpy>=1.24.0
+scipy>=1.10.0
+einops>=0.8.0
+
+# Screen capture and interaction
+mss>=9.0.1  # Screen capture
+opencv-python>=4.8.0
+Pillow>=10.0.0
+
+# Android emulator interaction
+pure-python-adb>=0.3.0.dev0  # ADB interface without native deps
+
+# RL and training
+gymnasium>=0.29.0  # Modern gym replacement
+tensorboard>=2.15.0
+wandb>=0.16.0
+tqdm>=4.66.0
+
+# OCR (for elixir/timer recognition)
+easyocr>=1.7.0  # Works on macOS, unlike PaddleOCR
+
+# Utilities
+moviepy>=1.0.3
+pandas>=2.0.0
+matplotlib>=3.8.0
+
+# Development
+pytest>=7.0.0
+pre-commit>=3.0.0

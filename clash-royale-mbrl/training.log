@@ -1,0 +1,148 @@
+✓ Emulator connected
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                    Clash Royale - DreamerV3 Training                          ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║  Training with: 2.6 Hog Cycle deck                                           ║
+║  Mode: Training Camp vs Trainer AI                                           ║
+║  Press Ctrl+C to stop training gracefully                                    ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+✓ Using MPS (Apple Silicon GPU)
+Logging to: logs/20251228_024428
+
+Starting training loop...
+Taking screenshots every 2.0s
+Training after 100 steps
+
+Step 0: Card 3 at right_mid
+Step 1: No action
+Step 2: Card 4 at center_bridge
+Step 3: No action
+Step 4: No action
+Step 5: Card 2 at center_mid
+Step 6: Card 4 at right_bridge
+Step 7: Card 1 at right_bridge
+libpng error: [00][00][00][00]: invalid chunk type
+
+=== Episode 1 ===
+Steps: 8 | Reward: 0.0049 | Avg(10): 0.0049
+Total steps: 8
+
+Game over detected, waiting for restart...
+Step 8: Card 1 at right_bridge
+Step 9: Card 4 at center_back
+Step 10: Card 3 at center_bridge
+Step 11: No action
+Step 12: Card 2 at left_mid
+Step 13: No action
+Step 14: Card 4 at king_front
+Step 15: Card 4 at right_mid
+Step 16: Card 1 at center_back
+Step 17: No action
+Step 18: Card 3 at right_back
+Step 19: Card 2 at right_back
+libpng error: IDAT: invalid block type
+
+=== Episode 2 ===
+Steps: 12 | Reward: 0.0185 | Avg(10): 0.0117
+Total steps: 20
+
+Game over detected, waiting for restart...
+Step 20: Card 1 at right_back
+libpng error: [00][00][00][00]: invalid chunk type
+
+=== Episode 3 ===
+Steps: 1 | Reward: 0.0045 | Avg(10): 0.0093
+Total steps: 21
+
+Game over detected, waiting for restart...
+Step 21: No action
+Step 22: Card 1 at right_mid
+Step 23: Card 2 at left_bridge
+Step 24: Card 3 at center_mid
+Step 25: Card 2 at center_mid
+Step 26: Card 3 at left_bridge
+Step 27: Card 3 at king_front
+Step 28: Card 2 at center_bridge
+Step 29: No action
+Step 30: Card 3 at right_bridge
+Step 31: Card 2 at right_back
+Step 32: Card 2 at king_front
+Step 33: No action
+Step 34: No action
+Step 35: Card 2 at center_back
+Step 36: Card 2 at center_bridge
+Step 37: Card 3 at center_bridge
+Step 38: Card 4 at center_mid
+Step 39: Card 2 at right_back
+Step 40: No action
+Step 41: Card 1 at left_bridge
+Step 42: Card 4 at king_front
+Step 43: No action
+Step 44: No action
+Step 45: Card 3 at center_bridge
+Step 46: No action
+Step 47: No action
+Step 48: Card 2 at king_front
+Step 49: Card 4 at left_mid
+Step 50: Card 1 at right_mid
+Step 51: Card 3 at right_back
+Step 52: Card 4 at center_back
+Step 53: No action
+Step 54: No action
+Step 55: Card 2 at left_bridge
+Step 56: Card 4 at king_front
+Step 57: No action
+Step 58: Card 2 at king_front
+Step 59: Card 1 at right_mid
+Step 60: No action
+Step 61: Card 4 at right_bridge
+Step 62: No action
+Step 63: Card 4 at center_bridge
+Step 64: No action
+Step 65: Card 2 at left_mid
+Step 66: Card 2 at right_back
+Step 67: Card 4 at center_bridge
+Step 68: Card 2 at right_mid
+Step 69: No action
+Step 70: No action
+Step 71: Card 3 at center_bridge
+Step 72: Card 4 at center_mid
+Step 73: Card 4 at left_mid
+Step 74: Card 2 at left_bridge
+Step 75: Card 2 at center_mid
+Step 76: Card 2 at left_back
+Step 77: Card 1 at center_back
+Step 78: Card 1 at left_back
+Step 79: Card 1 at left_back
+Step 80: Card 4 at left_back
+Step 81: Card 3 at center_back
+Step 82: Card 2 at center_mid
+Step 83: Card 2 at right_back
+Step 84: Card 1 at right_bridge
+Step 85: No action
+Step 86: Card 1 at center_mid
+Step 87: Card 3 at left_bridge
+Step 88: No action
+Step 89: Card 3 at center_back
+Step 90: Card 1 at center_bridge
+Step 91: Card 2 at left_bridge
+Step 92: Card 3 at right_back
+Step 93: Card 3 at center_bridge
+Step 94: Card 2 at center_mid
+Step 95: Card 3 at left_back
+Step 96: Card 4 at left_mid
+Step 97: No action
+Step 98: Card 1 at right_bridge
+Step 99: No action
+Traceback (most recent call last):
+  File "/Users/alpayh/Developer/ml2/clash-royale-mbrl/train_live.py", line 518, in <module>
+    }
+  File "/Users/alpayh/Developer/ml2/clash-royale-mbrl/train_live.py", line 514, in main
+    "actor": actor.state_dict(),
+    ^^^^^^^
+  File "/Users/alpayh/Developer/ml2/clash-royale-mbrl/train_live.py", line 408, in train
+    features = encoder(states)
+        ^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: Placeholder storage has not been allocated on MPS device!
