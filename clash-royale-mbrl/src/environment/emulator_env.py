@@ -1,17 +1,22 @@
 """
 Android Emulator Environment for Clash Royale on macOS.
 Uses scrcpy + mss for screen capture and ADB for action injection.
+Now supports KataCR perception integration (state + reward) and
+ADB screenshot fallback for robustness.
 """
 import subprocess
 import time
-import numpy as np
-from typing import Optional, Tuple
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterable, Optional, Tuple
 
 import cv2
 import mss
 import mss.tools
+import numpy as np
+
+from ..perception.katacr_pipeline import KataCRPerceptionEngine, KataCRVisionConfig
 
 
 @dataclass
@@ -23,6 +28,9 @@ class EmulatorConfig:
     screen_height: int = 2400
     capture_region: Optional[dict] = None  # {"top": 0, "left": 0, "width": 1080, "height": 2400}
     scrcpy_window_title: str = "Android"  # Window title to capture from
+    canonical_width: int = 1280  # KataCR expects ~1280x576 input (2.22 ratio)
+    canonical_height: int = 576
+    enable_adb_fallback: bool = True
 
 
 class ADBController:
@@ -91,6 +99,27 @@ class ADBController:
         self._adb_cmd("shell", "input", "keyevent", str(keycode))
 
 
+class ADBScreenshotter:
+    """Fallback frame capture using `adb exec-out screencap -p`."""
+
+    def __init__(self, config: EmulatorConfig):
+        self.config = config
+
+    def capture(self) -> np.ndarray:
+        result = subprocess.run(
+            [self.config.adb_path, "exec-out", "screencap", "-p"],
+            capture_output=True,
+            timeout=3,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"adb screencap failed: {result.stderr}")
+        img_array = np.frombuffer(result.stdout, dtype=np.uint8)
+        img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+        if img is None:
+            raise RuntimeError("Failed to decode adb screenshot")
+        return img
+
+
 class ScreenCapture:
     """
     High-performance screen capture using mss.
@@ -101,6 +130,7 @@ class ScreenCapture:
         self.config = config
         self.sct = mss.mss()
         self._monitor = None
+        self._adb_fallback = ADBScreenshotter(config) if config.enable_adb_fallback else None
     
     def _find_scrcpy_window(self) -> Optional[dict]:
         """
@@ -121,25 +151,30 @@ class ScreenCapture:
         Returns:
             np.ndarray: BGR image array (H, W, 3)
         """
-        if self._monitor is None:
-            self._monitor = self._find_scrcpy_window()
-        
-        screenshot = self.sct.grab(self._monitor)
-        frame = np.array(screenshot)
-        
-        # Convert BGRA to BGR (mss captures with alpha channel)
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
-        
-        # Resize to expected dimensions if needed
-        if frame.shape[:2] != (self.config.screen_height, self.config.screen_width):
-            frame = cv2.resize(frame, (self.config.screen_width, self.config.screen_height))
-        
-        return frame
+        frame = None
+        try:
+            if self._monitor is None:
+                self._monitor = self._find_scrcpy_window()
+            screenshot = self.sct.grab(self._monitor)
+            frame = np.array(screenshot)
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+        except Exception:
+            if self._adb_fallback is None:
+                raise
+            frame = self._adb_fallback.capture()
+
+        return self._normalize_frame(frame)
     
     def capture_rgb(self) -> np.ndarray:
         """Capture frame in RGB format."""
         frame = self.capture()
         return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    def _normalize_frame(self, frame: np.ndarray) -> np.ndarray:
+        target_size = (self.config.canonical_width, self.config.canonical_height)
+        if frame.shape[1] != target_size[0] or frame.shape[0] != target_size[1]:
+            frame = cv2.resize(frame, target_size, interpolation=cv2.INTER_AREA)
+        return frame
 
 
 class ClashRoyaleEmulatorEnv:
@@ -177,6 +212,10 @@ class ClashRoyaleEmulatorEnv:
     def get_observation(self) -> np.ndarray:
         """Get current screen frame."""
         return self.screen.capture_rgb()
+
+    def get_observation_bgr(self) -> np.ndarray:
+        """Get current screen frame in BGR (for KataCR pipeline)."""
+        return self.screen.capture()
     
     def get_arena_frame(self) -> np.ndarray:
         """Get only the arena portion of the screen."""
@@ -259,6 +298,53 @@ class ClashRoyaleEmulatorEnv:
         """Reset environment (start new battle if needed)."""
         # This would need game-specific logic
         pass
+
+
+class FPSLogger:
+    """Simple FPS tracker to monitor end-to-end latency."""
+
+    def __init__(self, window: int = 30):
+        self.window = window
+        self.times = deque(maxlen=window)
+
+    def tick(self) -> Optional[float]:
+        now = time.time()
+        self.times.append(now)
+        if len(self.times) < 2:
+            return None
+        span = self.times[-1] - self.times[0]
+        if span <= 0:
+            return None
+        return (len(self.times) - 1) / span
+
+
+class ClashRoyaleKataCREnv(ClashRoyaleEmulatorEnv):
+    """
+    Emulator environment wired to KataCR perception (state + reward).
+
+    Usage:
+      env = ClashRoyaleKataCREnv()
+      result, fps = env.capture_state()
+      # or inside a loop:
+      env.step(action)
+      result, fps = env.capture_state()
+    """
+
+    def __init__(self, config: Optional[EmulatorConfig] = None, katacr_cfg: Optional[KataCRVisionConfig] = None):
+        super().__init__(config)
+        self.katacr = KataCRPerceptionEngine(katacr_cfg)
+        self.fps_logger = FPSLogger()
+
+    def reset(self):
+        self.katacr.reset()
+        # Add game-specific navigation here when implementing full gym wrapper
+
+    def capture_state(self, deploy_cards: Optional[Iterable[str]] = None):
+        """Capture a frame, run KataCR perception, and return state+reward."""
+        frame_bgr = self.get_observation_bgr()
+        result = self.katacr.process(frame_bgr, deploy_cards=deploy_cards)
+        fps = self.fps_logger.tick()
+        return result, fps
 
 
 if __name__ == "__main__":

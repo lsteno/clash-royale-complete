@@ -1,0 +1,70 @@
+# macOS cruft
+.DS_Store
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+.venv_old_*/
+venv/
+env/
+ENV/
+
+# Dependency & build artifacts
+*.egg-info/
+.eggs/
+*.egg
+build/
+dist/
+.eggs/
+pip-wheel-metadata/
+*.whl
+
+# Test and coverage outputs
+.pytest_cache/
+.tox/
+.nox/
+.coverage*
+htmlcov/
+.mypy_cache/
+.dmypy.json
+.pyre/
+.pytype/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Tooling metadata
+.vscode/
+.idea/
+.VSCodeCounter
+
+# Logs, runs, and experiment outputs (any depth)
+logs/
+**/logs/
+runs/
+**/runs/
+wandb/
+**/wandb/
+checkpoints/
+**/checkpoints/
+outputs/
+**/outputs/
+*_logs/
+**/*_logs/
+*.log
+
+# Model weights and large artifacts
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.tflite
+
+# Temp files
+*.tmp
+*.swp
+*.swo
