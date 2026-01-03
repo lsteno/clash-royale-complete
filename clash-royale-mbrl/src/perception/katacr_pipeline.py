@@ -15,6 +15,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set
+import time
 
 import cv2
 import numpy as np
@@ -72,6 +73,9 @@ class VisualFusionAdapter:
     us point to the correct local weight files.
     """
 
+    MAX_GAME_TIME = 360  # seconds (3 min + overtime buffer)
+    MAX_EXTRAPOLATION_GAP = 5  # cap real-time inference gap in seconds
+
     def __init__(self, cfg: KataCRVisionConfig):
         self.cfg = cfg
         self.detectors = cfg.resolved_detectors()
@@ -81,6 +85,8 @@ class VisualFusionAdapter:
         self.ocr = OCR(onnx=cfg.ocr_onnx, use_gpu=cfg.ocr_gpu, lang="en")
         self.yolo = ComboDetector(self.detectors)
         self.classifier = CardClassifier(self.classifier_path)
+        self._last_time = 0
+        self._last_capture_ts: Optional[float] = None
 
     def _validate_assets(self):
         missing = [p for p in self.detectors if not p.exists()]
@@ -105,7 +111,12 @@ class VisualFusionAdapter:
         parts_pos = np.array(parts_pos)
         parts_pos = (parts_pos.reshape(-1, 2) * np.array(frame_bgr.shape[:2][::-1])).astype(np.int32).reshape(-1, 4)
 
+        now_ts = time.time()
         time_val = self.ocr.process_part1(parts[0], pil=False)
+        if np.isinf(time_val):
+            time_val = self._extrapolate_time(now_ts)
+        self._last_time = min(time_val, self.MAX_GAME_TIME)
+        self._last_capture_ts = now_ts
         arena = self.yolo.infer(parts[1], pil=False)
         cards = self.classifier.process_part3(parts[2], pil=False)
         elixir = self.ocr.process_part3_elixir(parts[2], pil=False)
@@ -119,6 +130,16 @@ class VisualFusionAdapter:
             "idx2card": self.classifier.idx2card,
             "parts_pos": parts_pos,
         }
+
+    def _extrapolate_time(self, now_ts: float) -> int:
+        """Estimate match clock when OCR fails using wall-clock deltas."""
+        if self._last_capture_ts is None:
+            return self._last_time
+        delta = max(0.0, now_ts - self._last_capture_ts)
+        if delta <= 1e-3:
+            return self._last_time
+        delta_seconds = min(int(round(delta)), self.MAX_EXTRAPOLATION_GAP)
+        return min(self._last_time + delta_seconds, self.MAX_GAME_TIME)
 
 
 class KataCRPerceptionEngine:

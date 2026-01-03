@@ -12,6 +12,7 @@ from PIL import Image
 import cv2
 import numpy as np
 from pathlib import Path
+import warnings
 import katacr.build_dataset.constant as const
 from katacr.build_dataset.utils.datapath_manager import PathManager
 
@@ -21,6 +22,12 @@ def ratio2name(img):
   for name, ratio in const.ratio.items():
     if ratio[0] <= r <= ratio[1]:
       return name
+  # Fallback: default to the canonical 2.22 ratio used in most KataCR configs.
+  default_ratio_name = '2.22'
+  if default_ratio_name in const.ratio:
+    warnings.warn(f"Unknown aspect ratio {r:.3f}; falling back to template '{default_ratio_name}'")
+    return default_ratio_name
+  raise ValueError(f"Unable to resolve aspect ratio for image shape {img.shape}")
 
 def extract_bbox(image, x, y, w, h, target_size=None):
   """

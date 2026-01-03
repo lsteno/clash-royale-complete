@@ -5,6 +5,7 @@ from pathlib import Path
 path_root = Path(__file__).parents[2]
 sys.path.append(str(path_root))
 from katacr.classification.train import ModelConfig, TrainConfig, ResNet
+from katacr.constants.card_list import idx2card as DEFAULT_IDX2CARD, card2idx as DEFAULT_CARD2IDX
 from katacr.utils.ckpt_manager import CheckpointManager
 import numpy as np
 import jax, jax.numpy as jnp
@@ -14,24 +15,41 @@ weight_path = path_root / 'logs/CardClassification-checkpoints'
 
 class CardClassifier:
   def __init__(self, weight_path=weight_path, load_step=None):
-    ckpt_mngr = CheckpointManager(weight_path)
-    if load_step is None:
-      load_step = int(sorted(Path(weight_path).glob('*'))[-1].name)
-    load_info = ckpt_mngr.restore(load_step)
-    variables, cfg = load_info['variables'], load_info['config']
-    self.img_size = cfg['image_size']
-    self.idx2card = cfg['idx2card']
-    self.card2idx = cfg['card2idx']
-    # print(self.idx2card)
-    model_cfg = ModelConfig(**cfg)
-    train_cfg = TrainConfig(**cfg)
-    self.model = ResNet(cfg=model_cfg)
-    self.model.create_fns()
-    state = self.model.get_states(train_cfg, train=False)
-    self.state = state.replace(params=variables['params'], tx=None, opt_state=None, batch_stats=variables['batch_stats'])
-    dummy = np.zeros((*train_cfg.image_size[::-1], 3), np.uint8)
-    self.__call__(dummy)
+    self._available = False
+    self._fallback_label = 'skeletons'  # redesigned cards default to skeletons for safety
+    self.idx2card = {str(k): v for k, v in DEFAULT_IDX2CARD.items()}
+    self.card2idx = DEFAULT_CARD2IDX.copy()
+    if self._fallback_label not in self.card2idx:
+      next_idx = max(DEFAULT_IDX2CARD.keys()) + 1
+      self.idx2card[str(next_idx)] = self._fallback_label
+      self.card2idx[self._fallback_label] = next_idx
+    self.img_size = (64, 64)
+    self.model = None
+    self.state = None
+
+    try:
+      ckpt_mngr = CheckpointManager(weight_path)
+      if load_step is None:
+        load_step = int(sorted(Path(weight_path).glob('*'))[-1].name)
+      load_info = ckpt_mngr.restore(load_step)
+      variables, cfg = load_info['variables'], load_info['config']
+      self.img_size = tuple(cfg.get('image_size', self.img_size))
+      self.idx2card = cfg.get('idx2card', self.idx2card)
+      self.card2idx = cfg.get('card2idx', self.card2idx)
+      model_cfg = ModelConfig(**cfg)
+      train_cfg = TrainConfig(**cfg)
+      self.model = ResNet(cfg=model_cfg)
+      self.model.create_fns()
+      state = self.model.get_states(train_cfg, train=False)
+      self.state = state.replace(params=variables['params'], tx=None, opt_state=None, batch_stats=variables['batch_stats'])
+      self._available = True
+    except Exception as exc:  # noqa: BLE001
+      print(f"Warning: CardClassifier fell back to dummy mode ({exc})")
   
+  def _fallback_predictions(self, count: int, keepdim: bool):
+    preds = [self._fallback_label for _ in range(count)]
+    return preds[0] if count == 1 and not keepdim else preds
+
   def __call__(self, x, keepdim=False, cvt_label=True, verbose=False):
     """
     Args:
@@ -48,20 +66,29 @@ class CardClassifier:
       img = img[..., None]
       l.append(img)
     x = np.array(l)
-    if x.dtype == np.uint8: x = x.astype(np.float32) / 255.
-    logits = jax.device_get(self.model.predict(self.state, x))
-    pred = np.argmax(logits, -1)
-    if cvt_label:
-      cards = []
-      for i in pred: cards.append(self.idx2card[str(i)])
-      pred = cards
-    if verbose:
-      print("class:", logits[0][pred[0]], "conf:", pred)
-      cv2.imshow('img', x[0,...,::-1])
-      cv2.waitKey(0)
-    if x.shape[0] == 1 and not keepdim:
-      return pred[0]
-    return pred
+    if not self._available or self.model is None or self.state is None:
+      return self._fallback_predictions(x.shape[0], keepdim)
+    try:
+      if x.dtype == np.uint8: x = x.astype(np.float32) / 255.
+      logits = jax.device_get(self.model.predict(self.state, x))
+      pred = np.argmax(logits, -1)
+      if cvt_label:
+        cards = []
+        for i in pred:
+          label = self.idx2card.get(str(i), self._fallback_label)
+          cards.append(label)
+        pred = cards
+      if verbose:
+        print("class:", logits[0][pred[0]], "conf:", pred)
+        cv2.imshow('img', x[0,...,::-1])
+        cv2.waitKey(0)
+      if x.shape[0] == 1 and not keepdim:
+        return pred[0]
+      return pred
+    except Exception as exc:  # noqa: BLE001
+      print(f"Warning: CardClassifier inference failed ({exc}); defaulting to skeletons")
+      self._available = False
+      return self._fallback_predictions(x.shape[0], keepdim)
   
   def process_part3(self, x: np.ndarray, pil=False, cvt_label=True, verbose=False):
     """

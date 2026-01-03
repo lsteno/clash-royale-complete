@@ -28,9 +28,10 @@ class EmulatorConfig:
     screen_height: int = 2400
     capture_region: Optional[dict] = None  # {"top": 0, "left": 0, "width": 1080, "height": 2400}
     scrcpy_window_title: str = "Android"  # Window title to capture from
-    canonical_width: int = 1280  # KataCR expects ~1280x576 input (2.22 ratio)
-    canonical_height: int = 576
+    canonical_width: int = 576   # KataCR expects portrait 1280x576 (H/W ≈ 2.22)
+    canonical_height: int = 1280
     enable_adb_fallback: bool = True
+    use_adb_capture_only: bool = True  # Use adb screencap when scrcpy window coords are unknown
 
 
 class ADBController:
@@ -128,9 +129,12 @@ class ScreenCapture:
     
     def __init__(self, config: EmulatorConfig):
         self.config = config
-        self.sct = mss.mss()
+        self.sct = None if config.use_adb_capture_only else mss.mss()
         self._monitor = None
-        self._adb_fallback = ADBScreenshotter(config) if config.enable_adb_fallback else None
+        if config.enable_adb_fallback or config.use_adb_capture_only:
+            self._adb_fallback = ADBScreenshotter(config)
+        else:
+            self._adb_fallback = None
     
     def _find_scrcpy_window(self) -> Optional[dict]:
         """
@@ -152,16 +156,21 @@ class ScreenCapture:
             np.ndarray: BGR image array (H, W, 3)
         """
         frame = None
-        try:
-            if self._monitor is None:
-                self._monitor = self._find_scrcpy_window()
-            screenshot = self.sct.grab(self._monitor)
-            frame = np.array(screenshot)
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
-        except Exception:
+        if self.config.use_adb_capture_only:
             if self._adb_fallback is None:
-                raise
+                raise RuntimeError("ADB capture requested but fallback is unavailable.")
             frame = self._adb_fallback.capture()
+        else:
+            try:
+                if self._monitor is None:
+                    self._monitor = self._find_scrcpy_window()
+                screenshot = self.sct.grab(self._monitor)
+                frame = np.array(screenshot)
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+            except Exception:
+                if self._adb_fallback is None:
+                    raise
+                frame = self._adb_fallback.capture()
 
         return self._normalize_frame(frame)
     
@@ -323,11 +332,11 @@ class ClashRoyaleKataCREnv(ClashRoyaleEmulatorEnv):
     Emulator environment wired to KataCR perception (state + reward).
 
     Usage:
-      env = ClashRoyaleKataCREnv()
-      result, fps = env.capture_state()
+    env = ClashRoyaleKataCREnv()
+    result, fps, frame = env.capture_state()
       # or inside a loop:
       env.step(action)
-      result, fps = env.capture_state()
+    result, fps, frame = env.capture_state()
     """
 
     def __init__(self, config: Optional[EmulatorConfig] = None, katacr_cfg: Optional[KataCRVisionConfig] = None):
@@ -340,11 +349,11 @@ class ClashRoyaleKataCREnv(ClashRoyaleEmulatorEnv):
         # Add game-specific navigation here when implementing full gym wrapper
 
     def capture_state(self, deploy_cards: Optional[Iterable[str]] = None):
-        """Capture a frame, run KataCR perception, and return state+reward."""
+        """Capture a frame, run KataCR perception, and return state, fps, frame."""
         frame_bgr = self.get_observation_bgr()
         result = self.katacr.process(frame_bgr, deploy_cards=deploy_cards)
         fps = self.fps_logger.tick()
-        return result, fps
+        return result, fps, frame_bgr
 
 
 if __name__ == "__main__":

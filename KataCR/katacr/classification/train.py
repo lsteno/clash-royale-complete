@@ -15,9 +15,9 @@ import numpy as np
 
 EMPTY_CARD_INDEX = 1
 
-class ModelConfig(Config):  # Mini ResNet   # ResNet50
-  stage_sizes = [1, 1, 2, 1]                # (3, 4, 6, 3)
-  filters = 4                               # 64
+class ModelConfig(Config):  # Mini ResNet as used in released checkpoints
+  stage_sizes = [1, 1, 2, 1]
+  filters = 4
   num_class: int
   def __init__(self, num_class, **kwargs):
     self.num_class = num_class
