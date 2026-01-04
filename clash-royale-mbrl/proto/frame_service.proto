@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package cr.rpc.v1;
+
+option java_multiple_files = true;
+option csharp_namespace = "Cr.Rpc.V1";
+option python_package = "cr.rpc.v1";
+
+// Frame transport for remote perception + Dreamer.
+// Raw frames are uint8 BGR, contiguous, HWC order.
+// State grids are float32, row-major, flattened C * H * W.
+message FrameFormat {
+  int32 width = 1;   // e.g., 576
+  int32 height = 2;  // e.g., 1280
+  int32 channels = 3; // always 3 (BGR)
+  string color_model = 4; // "BGR"; left as a string for forward compatibility
+}
+
+message RegionOfInterest {
+  int32 x = 1; // left, pixels in source frame
+  int32 y = 2; // top, pixels in source frame
+  int32 width = 3;
+  int32 height = 4;
+}
+
+message ProcessFrameRequest {
+  int64 frame_id = 1;
+  double timestamp = 2; // seconds since epoch (wall clock)
+  FrameFormat format = 3;
+  bytes frame_bgr = 4; // raw uint8 BGR buffer of size height * width * channels
+  repeated string card_hints = 5; // optional, may be empty
+  bool want_action = 6; // if true, server computes and returns action
+  string schema_version = 7; // e.g., "v1"
+  RegionOfInterest roi = 8; // optional lossless cropping on the server side
+}
+
+message StateGrid {
+  int32 channels = 1; // e.g., 8 or 15
+  int32 height = 2;   // e.g., 32
+  int32 width = 3;    // e.g., 18
+  repeated float values = 4; // float32, row-major C, H, W
+  string dtype = 5; // "float32" (explicit for forward compatibility)
+}
+
+message Action {
+  int32 card_idx = 1; // -1 or 0 means no-op depending on policy; server may omit field entirely
+  int32 grid_x = 2;   // 0-based grid X
+  int32 grid_y = 3;   // 0-based grid Y
+}
+
+message ProcessFrameResponse {
+  int64 frame_id = 1; // echoes request
+  StateGrid state_grid = 2; // omitted if server only returns action? normally present
+  float reward = 3;
+  bool done = 4;
+  Action action = 5; // omitted when want_action=false or policy local
+  double latency_ms = 6; // end-to-end server processing latency
+  bool ocr_failed = 7; // true when OCR time fallback was used
+  map<string, string> info_str = 8; // sparse string diagnostics (e.g., versions)
+  map<string, double> info_num = 9; // numeric diagnostics (e.g., timings)
+  string model_version = 10; // perception/Dreamer build identifier
+  string schema_version = 11; // echoes server schema version
+}
+
+message HeartbeatRequest {
+  string schema_version = 1;
+  string model_version = 2;
+}
+
+message HeartbeatResponse {
+  string schema_version = 1;
+  string model_version = 2;
+}
+
+service FrameService {
+  rpc ProcessFrame(ProcessFrameRequest) returns (ProcessFrameResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+}
