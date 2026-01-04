@@ -98,6 +98,7 @@ class OCR:
     # cv2.imwrite(f"/home/yy/Coding/datasets/Clash-Royale-Dataset/images/part3_elixir_classification/{self.save_count:3}.jpg", img)
     # self.save_count += 1  # DEBUG: elixir position
     results = self(img, pil=pil, det=False)
+    m = None
     for info in results:
       rec = info[0][0].lower()
       num = ''.join([c for c in rec.strip() if c.isnumeric()])

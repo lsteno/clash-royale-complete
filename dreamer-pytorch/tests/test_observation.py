@@ -63,7 +63,7 @@ def test_observation_decoder(shape=(3, 64, 64)):
     assert obs_sample.size(4) == w
 
 
-@pytest.mark.parametrize("shape", [(3, 64, 64), (4, 104, 64)])
+@pytest.mark.parametrize("shape", [(3, 64, 64), (4, 104, 64), (15, 32, 18)])
 def test_observation(shape):
     batch_size = 2
     c, h, w = shape

@@ -78,7 +78,24 @@ class StateBuilder:
     self.deploy_history = dict()
   
   def _add_bar_item(self, bar_level=None, bar1=None, bar2=None, body=None):
+    bar_level = self._normalize_box(bar_level, "bar_level")
+    bar1 = self._normalize_box(bar1, "bar1")
+    bar2 = self._normalize_box(bar2, "bar2")
+    body = self._normalize_box(body, "body")
+    if bar_level is None and bar1 is None and bar2 is None and body is None:
+      return
     self.bar_items.append(BarItem(self, bar_level=bar_level, bar1=bar1, bar2=bar2, body=body))
+
+  def _normalize_box(self, box, label):
+    if box is None:
+      return None
+    arr = np.asarray(box)
+    if arr.size == 8 and arr.ndim != 1:
+      arr = arr.reshape(8)
+    if arr.ndim != 1 or arr.shape[0] != 8:
+      print(f"Warning(state): (time={self.time}) {label} box has invalid shape {arr.shape}, skipping.")
+      return None
+    return arr
   
   def render(self, action=None):
     from PIL import ImageDraw, Image

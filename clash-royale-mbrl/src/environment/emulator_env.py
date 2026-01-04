@@ -7,9 +7,9 @@ ADB screenshot fallback for robustness.
 import subprocess
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Optional, Tuple
+from typing import Iterable, Optional, Sequence, Tuple
 
 import cv2
 import mss
@@ -17,21 +17,90 @@ import mss.tools
 import numpy as np
 
 from ..perception.katacr_pipeline import KataCRPerceptionEngine, KataCRVisionConfig
+from src.specs import OBS_SPEC
+
+
+@dataclass(frozen=True)
+class TapSpec:
+    """Simple struct describing a single tap on the emulator screen."""
+
+    x: int
+    y: int
+    delay: float = 0.5
+    label: str = ""
+
+
+DEFAULT_START_SEQUENCE: Tuple[TapSpec, ...] = (
+    TapSpec(980, 320, 0.5, "menu_hamburger"),
+    TapSpec(648, 746, 1.0, "training_camp"),
+    TapSpec(730, 1400, 2.0, "start_training"),
+)
+
+DEFAULT_POST_SEQUENCE: Tuple[TapSpec, ...] = (
+    TapSpec(606, 2024, 3.0, "ok_button"),
+)
+
+
+@dataclass
+class MatchNavigationConfig:
+    """Hard-coded tap sequences to cycle through Training Camp matches."""
+
+    post_match_wait: float = 3.0
+    pre_start_wait: float = 1.0
+    post_start_wait: float = 2.5
+    log_taps: bool = True
+    start_sequence: Tuple[TapSpec, ...] = DEFAULT_START_SEQUENCE
+    post_match_sequence: Tuple[TapSpec, ...] = DEFAULT_POST_SEQUENCE
+
+
+class MatchNavigator:
+    """Utility class that replays canned tap sequences via ADB."""
+
+    def __init__(self, adb: "ADBController", cfg: MatchNavigationConfig):
+        self.adb = adb
+        self.cfg = cfg
+
+    def _run_sequence(self, sequence: Sequence[TapSpec]):
+        for tap in sequence:
+            if self.cfg.log_taps and tap.label:
+                print(f"[Navigator] tapping {tap.label} at ({tap.x}, {tap.y})")
+            self.adb.tap(tap.x, tap.y)
+            if tap.delay > 0:
+                time.sleep(tap.delay)
+
+    def dismiss_post_match(self):
+        if self.cfg.post_match_wait > 0:
+            time.sleep(self.cfg.post_match_wait)
+        self._run_sequence(self.cfg.post_match_sequence)
+
+    def start_training_match(self):
+        if self.cfg.pre_start_wait > 0:
+            time.sleep(self.cfg.pre_start_wait)
+        self._run_sequence(self.cfg.start_sequence)
+        if self.cfg.post_start_wait > 0:
+            time.sleep(self.cfg.post_start_wait)
 
 
 @dataclass
 class EmulatorConfig:
     """Configuration for Android emulator connection."""
+
     adb_path: str = "adb"
     device_serial: Optional[str] = None  # None for default device
     screen_width: int = 1080
     screen_height: int = 2400
     capture_region: Optional[dict] = None  # {"top": 0, "left": 0, "width": 1080, "height": 2400}
     scrcpy_window_title: str = "Android"  # Window title to capture from
-    canonical_width: int = 576   # KataCR expects portrait 1280x576 (H/W ≈ 2.22)
+    canonical_width: int = 576  # KataCR expects portrait 1280x576 (H/W ≈ 2.22)
     canonical_height: int = 1280
     enable_adb_fallback: bool = True
     use_adb_capture_only: bool = True  # Use adb screencap when scrcpy window coords are unknown
+    auto_restart: bool = True  # Navigate back to Training Camp after each match automatically
+    navigation: MatchNavigationConfig = field(default_factory=MatchNavigationConfig)
+    ui_probe_debug: bool = True  # Log sampled UI button colors periodically
+    ui_probe_log_every: float = 1.5  # Minimum seconds between probe logs
+    ui_probe_save_frames: bool = False  # Save frames when probes fail to match
+    ui_probe_dir: Path = Path("logs/ui_probe")
 
 
 class ADBController:
@@ -191,9 +260,9 @@ class ClashRoyaleEmulatorEnv:
     Gymnasium-compatible environment for Clash Royale via Android emulator.
     """
     
-    # Arena grid dimensions (32 tiles wide, 18 tiles tall)
-    GRID_WIDTH = 32
-    GRID_HEIGHT = 18
+    # Arena grid dimensions (match OBS_SPEC: width=18, height=32)
+    GRID_WIDTH = OBS_SPEC.width
+    GRID_HEIGHT = OBS_SPEC.height
     
     # Action space: (card_index, grid_x, grid_y)
     # card_index: 0 = no action, 1-4 = select card
@@ -203,6 +272,13 @@ class ClashRoyaleEmulatorEnv:
         self.config = config or EmulatorConfig()
         self.adb = ADBController(self.config)
         self.screen = ScreenCapture(self.config)
+        self.navigator = (
+            MatchNavigator(self.adb, self.config.navigation)
+            if self.config.auto_restart
+            else None
+        )
+        self._last_ui_probe_log = 0.0
+        self._ok_hit_streak = 0  # consecutive frames meeting OK-button color
         
         # Screen regions (normalized 0-1)
         self.arena_region = {
@@ -225,6 +301,88 @@ class ClashRoyaleEmulatorEnv:
     def get_observation_bgr(self) -> np.ndarray:
         """Get current screen frame in BGR (for KataCR pipeline)."""
         return self.screen.capture()
+
+    def _screen_to_frame_coords(self, x: int, y: int, frame: np.ndarray) -> Tuple[int, int]:
+        """Scale raw screen coords (e.g., 1080x2400) into the normalized frame size."""
+        fx = int(round(x * frame.shape[1] / self.config.screen_width))
+        fy = int(round(y * frame.shape[0] / self.config.screen_height))
+        fx = int(np.clip(fx, 0, frame.shape[1] - 1))
+        fy = int(np.clip(fy, 0, frame.shape[0] - 1))
+        return fx, fy
+
+    @staticmethod
+    def _matches_color(pixel: np.ndarray, target_bgr: Tuple[int, int, int], tol: int = 30) -> bool:
+        """Check if a BGR pixel is within tolerance of a target color."""
+        return bool(np.all(np.abs(pixel.astype(int) - np.array(target_bgr)) <= tol))
+
+    @staticmethod
+    def _color_distance(pixel: np.ndarray, target_bgr: Tuple[int, int, int]) -> int:
+        """Return max-channel absolute distance for quick diagnostics."""
+        return int(np.max(np.abs(pixel.astype(int) - np.array(target_bgr))))
+
+    @staticmethod
+    def _sample_patch(frame: np.ndarray, center: Tuple[int, int], radius: int = 2) -> np.ndarray:
+        """Average BGR color in a (2r+1)x(2r+1) patch around center."""
+        cx, cy = center
+        x0, x1 = max(0, cx - radius), min(frame.shape[1], cx + radius + 1)
+        y0, y1 = max(0, cy - radius), min(frame.shape[0], cy + radius + 1)
+        patch = frame[y0:y1, x0:x1]
+        if patch.size == 0:
+            return frame[cy, cx]
+        return patch.mean(axis=(0, 1))
+
+    def is_match_over(self) -> bool:
+        """Detect end-of-match UI by sampling the OK button color and debouncing across frames."""
+        frame = self.get_observation_bgr()  # BGR, already normalized to canonical size
+
+        # Screen-space coordinates provided by user (for 1080x2400 reference)
+        ok_screen = (613, 2021)      # expected color #44beff (BGR: 255,190,68)
+
+        ok_px = self._screen_to_frame_coords(*ok_screen, frame)
+
+        ok_pixel = frame[ok_px[1], ok_px[0]]
+
+        # Use a small patch average to avoid resize artifacts
+        ok_mean = self._sample_patch(frame, ok_px, radius=2)
+
+        ok_color = (255, 187, 104)
+        ok_hit = self._matches_color(ok_mean, ok_color, tol=40)
+
+        # Require multiple consecutive frames to reduce flicker/false positives
+        self._ok_hit_streak = self._ok_hit_streak + 1 if ok_hit else 0
+        match_over = self._ok_hit_streak >= 2
+
+        now = time.time()
+        if self.config.ui_probe_debug and (now - self._last_ui_probe_log) >= self.config.ui_probe_log_every:
+            self._last_ui_probe_log = now
+            ok_dist = self._color_distance(ok_mean, ok_color)
+            print(
+                f"[UIProbe] ok@{ok_px} bgr={ok_pixel.tolist()} mean={ok_mean.round(1).tolist()} dist={ok_dist} hit={ok_hit} streak={self._ok_hit_streak}"
+            )
+
+            if self.config.ui_probe_save_frames:
+                # Save an annotated frame showing where the probe sampled.
+                annotated = frame.copy()
+                cv2.circle(annotated, ok_px, 6, (0, 0, 255), thickness=2)
+                cv2.putText(
+                    annotated,
+                    f"ok@{ok_px} dist={ok_dist} hit={ok_hit} streak={self._ok_hit_streak}",
+                    (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 0, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+
+                probe_dir = Path(self.config.ui_probe_dir)
+                probe_dir.mkdir(parents=True, exist_ok=True)
+                timestamp = int(now * 1000)
+                out_path = probe_dir / f"ui_probe_{timestamp}.png"
+                cv2.imwrite(str(out_path), annotated)
+                print(f"[UIProbe] saved annotated frame to {out_path}")
+
+        return match_over
     
     def get_arena_frame(self) -> np.ndarray:
         """Get only the arena portion of the screen."""
@@ -251,8 +409,9 @@ class ClashRoyaleEmulatorEnv:
         arena_w = arena_right - arena_left
         
         # Map grid to pixel
-        pixel_x = arena_left + int((grid_x / self.GRID_WIDTH) * arena_w)
-        pixel_y = arena_top + int((grid_y / self.GRID_HEIGHT) * arena_h)
+        # Use (dim - 1) to keep taps inside the arena even at the max index
+        pixel_x = arena_left + int((grid_x / max(1, self.GRID_WIDTH - 1)) * arena_w)
+        pixel_y = arena_top + int((grid_y / max(1, self.GRID_HEIGHT - 1)) * arena_h)
         
         return pixel_x, pixel_y
     
@@ -343,10 +502,27 @@ class ClashRoyaleKataCREnv(ClashRoyaleEmulatorEnv):
         super().__init__(config)
         self.katacr = KataCRPerceptionEngine(katacr_cfg)
         self.fps_logger = FPSLogger()
+        self._match_active = False
+        self._pending_post_match_cleanup = False
 
     def reset(self):
         self.katacr.reset()
-        # Add game-specific navigation here when implementing full gym wrapper
+        if not self.config.auto_restart or self.navigator is None:
+            return
+        if self._pending_post_match_cleanup:
+            self.navigator.dismiss_post_match()
+            self._pending_post_match_cleanup = False
+        if self._match_active:
+            # Already in the middle of a match; nothing else to do.
+            return
+        self.navigator.start_training_match()
+        self._match_active = True
+
+    def mark_match_finished(self):
+        if not self.config.auto_restart or self.navigator is None:
+            return
+        self._match_active = False
+        self._pending_post_match_cleanup = True
 
     def capture_state(self, deploy_cards: Optional[Iterable[str]] = None):
         """Capture a frame, run KataCR perception, and return state, fps, frame."""
