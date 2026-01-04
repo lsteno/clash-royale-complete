@@ -14,6 +14,8 @@ if str(DREAMER_ROOT) not in sys.path:
     sys.path.insert(0, str(DREAMER_ROOT))
 
 import torch
+import gym
+import numpy as np
 try:
     from rlpyt.runners.minibatch_rl import MinibatchRl
     from rlpyt.samplers.serial.sampler import SerialSampler
@@ -31,7 +33,13 @@ from dreamer.envs.wrapper import make_wapper
 
 from src.environment.emulator_env import EmulatorConfig
 from src.environment.online_env import ClashRoyaleDreamerEnv, OnlineEnvConfig
+from src.environment.remote_bridge import RemoteBridge, RemoteClashRoyaleEnv
+from cr.rpc.v1.processor import FrameServiceProcessor, ProcessorConfig
+from cr.rpc.v1.server import RpcServerConfig, serve_forever
 from src.specs import ACTION_SPEC, OBS_SPEC
+from rlpyt.spaces.float_box import FloatBox
+import asyncio
+import threading
 
 
 @dataclass
@@ -47,6 +55,9 @@ class TrainConfig:
     log_interval: int = 1_000
     print_interval: int = 100
     ui_probe_save_frames: bool = False
+    use_remote_frames: bool = False
+    rpc_host: str = "0.0.0.0"
+    rpc_port: int = 50051
 
 
 def parse_args() -> TrainConfig:
@@ -62,6 +73,9 @@ def parse_args() -> TrainConfig:
     parser.add_argument("--log-interval", type=int, default=TrainConfig.log_interval)
     parser.add_argument("--print-interval", type=int, default=TrainConfig.print_interval, help="Console log every N env steps")
     parser.add_argument("--ui-probe-save-frames", action="store_true", help="Save annotated UI probe frames for debugging")
+    parser.add_argument("--use-remote-frames", action="store_true", help="Consume observations from remote FrameService (Machine B emulator)")
+    parser.add_argument("--rpc-host", type=str, default=TrainConfig.rpc_host, help="FrameService listen host (Machine A)")
+    parser.add_argument("--rpc-port", type=int, default=TrainConfig.rpc_port, help="FrameService listen port (Machine A)")
     args = parser.parse_args()
     return TrainConfig(
         logdir=args.logdir,
@@ -75,10 +89,33 @@ def parse_args() -> TrainConfig:
         log_interval=args.log_interval,
         print_interval=args.print_interval,
         ui_probe_save_frames=args.ui_probe_save_frames,
+        use_remote_frames=args.use_remote_frames,
+        rpc_host=args.rpc_host,
+        rpc_port=args.rpc_port,
     )
 
 
 def build_sampler(cfg: TrainConfig) -> SerialSampler:
+    if cfg.use_remote_frames:
+        # Remote frames are pushed by Machine B via gRPC. Training consumes them here.
+        bridge = RemoteBridge()
+        obs_space = FloatBox(low=0.0, high=1.0, shape=OBS_SPEC.shape, dtype=np.float32)
+        act_space = gym.spaces.Discrete(ACTION_SPEC.size)
+
+        def env_factory():
+            return RemoteClashRoyaleEnv(bridge, obs_space, act_space)
+
+        env_kwargs = {}
+        sampler = SerialSampler(
+            EnvCls=env_factory,
+            env_kwargs=env_kwargs,
+            eval_env_kwargs=env_kwargs,
+            batch_T=cfg.batch_T,
+            batch_B=cfg.num_envs,
+            max_decorrelation_steps=0,
+        )
+        return sampler, bridge
+
     env_factory = make_wapper(ClashRoyaleDreamerEnv, [OneHotAction], [dict()])
     env_kwargs = dict(
         config=OnlineEnvConfig(
@@ -93,7 +130,7 @@ def build_sampler(cfg: TrainConfig) -> SerialSampler:
         batch_B=cfg.num_envs,
         max_decorrelation_steps=0,
     )
-    return sampler
+    return sampler, None
 
 
 def _resolve_affinity(device: str) -> dict:
@@ -108,7 +145,22 @@ def _resolve_affinity(device: str) -> dict:
 def main() -> None:
     cfg = parse_args()
     cfg.logdir.mkdir(parents=True, exist_ok=True)
-    sampler = build_sampler(cfg)
+    sampler, bridge = build_sampler(cfg)
+
+    server_thread = None
+    if cfg.use_remote_frames:
+        if bridge is None:
+            raise RuntimeError("Remote frames requested but bridge missing")
+
+        def _run_server():
+            proc_cfg = ProcessorConfig()
+            processor = FrameServiceProcessor(proc_cfg, bridge=bridge)
+            server_cfg = RpcServerConfig(host=cfg.rpc_host, port=cfg.rpc_port)
+            asyncio.run(serve_forever(processor, server_cfg))
+
+        server_thread = threading.Thread(target=_run_server, daemon=True)
+        server_thread.start()
+
     algo = Dreamer(horizon=10, kl_scale=0.1, use_pcont=True)
     agent = AtariDreamerAgent(
         train_noise=0.4,

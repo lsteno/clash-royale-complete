@@ -67,6 +67,8 @@ async def main_async(args: argparse.Namespace) -> None:
                 frame_id += 1
                 continue
 
+            match_over = bool(resp.done or resp.info_num.get("match_over", 0.0) > 0.5)
+
             # Apply action if provided
             if args.want_action and resp.HasField("action") and resp.action.card_idx > 0:
                 env.step((resp.action.card_idx, resp.action.grid_x, resp.action.grid_y))
@@ -75,7 +77,22 @@ async def main_async(args: argparse.Namespace) -> None:
             print(
                 f"frame={resp.frame_id} latency_ms={resp.latency_ms:.1f} reward={resp.reward:.3f}"
                 + (f" action=({resp.action.card_idx},{resp.action.grid_x},{resp.action.grid_y})" if resp.HasField("action") else "")
+                + (" match_over=1" if match_over else "")
             )
+
+            if match_over:
+                # Let the client-side navigator clear dialogs and start a new Training Camp match.
+                nav = getattr(env, "navigator", None)
+                if nav is not None:
+                    try:
+                        nav.dismiss_post_match()
+                        nav.start_training_match()
+                    except Exception as exc:
+                        print(f"Navigator error after match end: {exc}")
+                # Give the emulator a moment to load the next match before resuming streaming.
+                await asyncio.sleep(2.0)
+                frame_id += 1
+                continue
 
             frame_id += 1
             elapsed = time.time() - loop_start

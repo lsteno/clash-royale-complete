@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Callable, Optional, Sequence
+from typing import Callable, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -15,6 +15,7 @@ from cr.rpc.v1 import frame_service_pb2 as pb2
 from src.environment.online_env import StateTensorEncoder
 from src.perception.katacr_pipeline import KataCRPerceptionEngine, KataCRVisionConfig
 from src.specs import OBS_SPEC
+from src.environment.remote_bridge import RemoteBridge
 
 ActionFn = Callable[[np.ndarray, dict, float, dict], Optional[pb2.Action]]
 
@@ -36,11 +37,13 @@ class FrameServiceProcessor:
         cfg: ProcessorConfig = ProcessorConfig(),
         vision_cfg: Optional[KataCRVisionConfig] = None,
         action_fn: Optional[ActionFn] = None,
+        bridge: Optional[RemoteBridge] = None,
     ):
         self._cfg = cfg
         self._perception = KataCRPerceptionEngine(vision_cfg)
         self._encoder = StateTensorEncoder(cfg.max_game_seconds)
         self._action_fn = action_fn
+        self._bridge = bridge
 
     async def process_frame(self, request: pb2.ProcessFrameRequest) -> pb2.ProcessFrameResponse:
         t0 = time.time()
@@ -48,6 +51,9 @@ class FrameServiceProcessor:
 
         # Run perception (KataCR)
         perception_result = self._perception.process(frame_bgr, deploy_cards=None)
+
+        # Detect end-of-match via UI color probe on the received frame.
+        match_over = _detect_match_over(frame_bgr)
 
         # Encode grid to float32 CxHxW row-major
         grid = self._encoder.encode(
@@ -65,18 +71,27 @@ class FrameServiceProcessor:
         )
         state_grid.values.extend(grid.astype(np.float32).ravel().tolist())
 
+        latency_ms = (time.time() - t0) * 1000.0
+        reward_value = float(perception_result.reward if perception_result.reward is not None else 0.0)
+        done_value = bool(match_over)
         action_msg = None
-        if request.want_action and self._action_fn is not None:
-            act = self._action_fn(grid, perception_result.state, perception_result.reward, perception_result.info)
-            if act is not None:
-                action_msg = act
+        if request.want_action:
+            if self._bridge is not None:
+                # Hand the observation to the local trainer and wait for its action.
+                act_tuple = self._bridge.publish(grid, reward_value, done_value, perception_result.info)
+                if act_tuple is not None:
+                    action_msg = pb2.Action(card_idx=int(act_tuple[0]), grid_x=int(act_tuple[1]), grid_y=int(act_tuple[2]))
+            elif self._action_fn is not None:
+                act = self._action_fn(grid, perception_result.state, perception_result.reward, perception_result.info)
+                if act is not None:
+                    action_msg = act
 
         latency_ms = (time.time() - t0) * 1000.0
         resp = pb2.ProcessFrameResponse(
             frame_id=request.frame_id,
             state_grid=state_grid,
-            reward=float(perception_result.reward if perception_result.reward is not None else 0.0),
-            done=False,
+            reward=reward_value,
+            done=done_value,
             latency_ms=latency_ms,
             ocr_failed=bool(perception_result.info.get("ocr_time_failed", False)),
             model_version=self._cfg.model_version,
@@ -93,6 +108,7 @@ class FrameServiceProcessor:
         resp.info_num.update({
             "server_ms": latency_ms,
             "timestamp": request.timestamp,
+            "match_over": 1.0 if done_value else 0.0,
         })
         return resp
 
@@ -124,3 +140,31 @@ class FrameServiceProcessor:
         x1 = int(max(x0, min(w, roi.x + roi.width)))
         y1 = int(max(y0, min(h, roi.y + roi.height)))
         return frame[y0:y1, x0:x1, :]
+
+
+def _detect_match_over(frame_bgr: np.ndarray) -> bool:
+    """Lightweight OK-button color probe on the canonical frame received over RPC."""
+    if frame_bgr.size == 0:
+        return False
+
+    # Reference coordinates from emulator_env: screen (1080x2400) -> canonical resize.
+    ref_w, ref_h = 1080.0, 2400.0
+    ok_screen = (613.0, 2021.0)
+    target_color = np.array([255, 187, 104], dtype=np.float32)
+    tol = 40.0
+
+    h, w = frame_bgr.shape[:2]
+    fx = int(round(ok_screen[0] * w / ref_w))
+    fy = int(round(ok_screen[1] * h / ref_h))
+    fx = int(np.clip(fx, 0, w - 1))
+    fy = int(np.clip(fy, 0, h - 1))
+
+    # Patch average to reduce resize noise.
+    r = 2
+    x0, x1 = max(0, fx - r), min(w, fx + r + 1)
+    y0, y1 = max(0, fy - r), min(h, fy + r + 1)
+    patch = frame_bgr[y0:y1, x0:x1]
+    mean = patch.mean(axis=(0, 1)) if patch.size else frame_bgr[fy, fx]
+
+    dist = np.max(np.abs(mean.astype(np.float32) - target_color))
+    return bool(dist <= tol)
