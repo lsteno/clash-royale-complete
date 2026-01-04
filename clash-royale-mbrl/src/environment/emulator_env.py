@@ -348,9 +348,9 @@ class ClashRoyaleEmulatorEnv:
         ok_color = (255, 187, 104)
         ok_hit = self._matches_color(ok_mean, ok_color, tol=40)
 
-        # Require multiple consecutive frames to reduce flicker/false positives
-        self._ok_hit_streak = self._ok_hit_streak + 1 if ok_hit else 0
-        match_over = self._ok_hit_streak >= 2
+        # One-shot detection: end match as soon as the probe hits.
+        self._ok_hit_streak = 1 if ok_hit else 0
+        match_over = ok_hit
 
         now = time.time()
         if self.config.ui_probe_debug and (now - self._last_ui_probe_log) >= self.config.ui_probe_log_every:

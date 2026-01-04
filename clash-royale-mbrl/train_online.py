@@ -18,6 +18,7 @@ try:
     from rlpyt.runners.minibatch_rl import MinibatchRl
     from rlpyt.samplers.serial.sampler import SerialSampler
     from rlpyt.utils.logging.context import logger_context
+    from rlpyt.utils.logging import logger
 except ModuleNotFoundError as exc:  # pragma: no cover - guides users to install deps.
     raise ModuleNotFoundError(
         "rlpyt is required for online training. Install it via 'pip install rlpyt'."
@@ -44,6 +45,7 @@ class TrainConfig:
     num_envs: int = 1
     batch_T: int = 8
     log_interval: int = 1_000
+    print_interval: int = 100
     ui_probe_save_frames: bool = False
 
 
@@ -58,6 +60,7 @@ def parse_args() -> TrainConfig:
     parser.add_argument("--num-envs", type=int, default=TrainConfig.num_envs)
     parser.add_argument("--batch-T", type=int, default=TrainConfig.batch_T)
     parser.add_argument("--log-interval", type=int, default=TrainConfig.log_interval)
+    parser.add_argument("--print-interval", type=int, default=TrainConfig.print_interval, help="Console log every N env steps")
     parser.add_argument("--ui-probe-save-frames", action="store_true", help="Save annotated UI probe frames for debugging")
     args = parser.parse_args()
     return TrainConfig(
@@ -70,6 +73,7 @@ def parse_args() -> TrainConfig:
         num_envs=args.num_envs,
         batch_T=args.batch_T,
         log_interval=args.log_interval,
+        print_interval=args.print_interval,
         ui_probe_save_frames=args.ui_probe_save_frames,
     )
 
@@ -119,7 +123,7 @@ def main() -> None:
         agent=agent,
         sampler=sampler,
         n_steps=cfg.total_steps,
-        log_interval_steps=cfg.log_interval,
+        log_interval_steps=min(cfg.log_interval, cfg.print_interval),
         affinity=_resolve_affinity(cfg.device),
     )
     config_dict = dict(
@@ -132,12 +136,18 @@ def main() -> None:
         wandb_project=cfg.wandb_project,
         wandb_run=cfg.wandb_run,
     )
+    try:
+        logger.set_snapshot_gap(2000)
+    except AttributeError:
+        pass
     with logger_context(
         str(cfg.logdir),
         cfg.seed,
         "clash_royale_dreamer",
         config_dict,
         use_summary_writer=True,
+        snapshot_mode="last",
+        override_prefix=True,
     ):
         runner.train()
 

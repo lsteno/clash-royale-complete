@@ -314,3 +314,7 @@ class ClashRoyaleDreamerEnv(Env):
             print("[Env] Ending episode due to ui_buttons")
             return True
         return False
+
+    def _is_terminal(self, info: dict) -> bool:
+        # this didn't work well in practice
+        return False
