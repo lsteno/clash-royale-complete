@@ -1,189 +1,150 @@
-# Clash Royale Model-Based RL (DreamerV3)
+# Clash Royale Model-Based RL
 
-An AI agent that learns to play Clash Royale using **DreamerV3** world model. Supports both offline training on expert replays and online training with parallel emulators.
+An AI agent that learns to play Clash Royale using **Dreamer** world model with distributed training support. Machine A (GPU server) runs perception and training, Machine B (local) runs the Android emulator and streams frames.
 
 Based on [KataCR](https://github.com/wty-yy/KataCR) perception and the paper ["KataCR: A Non-Embedded AI Agent for Clash Royale"](https://arxiv.org/abs/2406.17998).
 
 ## Features
 
-- 🧠 **DreamerV3 World Model** - Learns environment dynamics from data
-- 🎮 **Live Play** - Plays via ADB on Android emulators
-- 📊 **Offline Training** - Learn from expert replay dataset
-- 🚀 **Online Training** - Train with 3+ parallel emulators
-- 🍎 **Apple Silicon** - Optimized for MPS (M1/M2/M3)
-
----
-
-## Quick Start
-
-```bash
-# 1. Clone this repo and dependencies
-git clone <this-repo> clash-royale-mbrl
-git clone https://github.com/wty-yy/KataCR
-git clone https://github.com/wty-yy/Clash-Royale-Replay-Dataset
-
-# 2. Setup Python environment
-cd clash-royale-mbrl
-python -m venv ../.venv
-source ../.venv/bin/activate
-pip install -r requirements-apple-silicon.txt
-
-# 3. Download KataCR detector weights (see below)
-
-# 4. Train offline (~15 min)
-python train_offline_fast.py --epochs 5 --steps-per-epoch 300
-
-# 5. Play live
-python play_live.py --checkpoint logs/fast_*/best.pt --debug
-```
+- 🧠 **Dreamer World Model** - Learns environment dynamics from observations
+- 🎮 **Remote Training** - Distributed setup with gRPC frame streaming
+- 📊 **KataCR Perception** - YOLOv8 object detection + card classification
+- 🖥️ **GPU Accelerated** - JAX for classification, PyTorch for Dreamer
+- 🍎 **Multi-Platform** - Linux (CUDA) for training, macOS for emulator
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     DreamerV3 World Model                       │
-├─────────────────────────────────────────────────────────────────┤
-│  Observation: (15, 32, 18) spatial grid                         │
-│  - Channels 0-9: Unit category one-hot                          │
-│  - Channel 10-11: Enemy/Friendly flag                           │
-│  - Channel 12: Unit health                                      │
-│  - Channel 13: Elixir (0-10 normalized)                         │
-│  - Channel 14: Game time (normalized)                           │
-├─────────────────────────────────────────────────────────────────┤
-│  RSSM (Recurrent State-Space Model):                            │
-│  - Encoder: MLP (obs → 256-dim embedding)                       │
-│  - GRU: 256 deterministic state                                 │
-│  - Stochastic: 32-dim Gaussian latent                           │
-│  - Decoder: reconstruct observation                             │
-│  - Reward head: predict rewards                                 │
-├─────────────────────────────────────────────────────────────────┤
-│  Actor-Critic (trained via imagination):                        │
-│  - Actor: latent → action distribution                          │
-│  - Critic: latent → value estimate                              │
-│  Parameters: ~5.5M                                              │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           Distributed Training Setup                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  Machine B (Mac/Local)              Machine A (GCP/GPU Server)              │
+│  ┌─────────────────────┐            ┌──────────────────────────────┐        │
+│  │  Android Emulator   │            │      FrameService (gRPC)     │        │
+│  │  Clash Royale Game  │───BGR───▶  │  ┌────────────────────────┐  │        │
+│  │                     │  frames    │  │   KataCR Perception    │  │        │
+│  │  remote_client_loop │            │  │  - YOLOv8 Detection    │  │        │
+│  │  ◀──────────────────│◀─actions── │  │  - Card Classification │  │        │
+│  │                     │            │  │  - OCR (PaddleOCR)     │  │        │
+│  └─────────────────────┘            │  └────────────────────────┘  │        │
+│                                     │             │                 │        │
+│                                     │             ▼                 │        │
+│                                     │  ┌────────────────────────┐  │        │
+│                                     │  │   State Grid Encoder   │  │        │
+│                                     │  │   (15, 32, 18) tensor  │  │        │
+│                                     │  └────────────────────────┘  │        │
+│                                     │             │                 │        │
+│                                     │             ▼                 │        │
+│                                     │  ┌────────────────────────┐  │        │
+│                                     │  │   Dreamer Training     │  │        │
+│                                     │  │   - RSSM World Model   │  │        │
+│                                     │  │   - Actor-Critic       │  │        │
+│                                     │  └────────────────────────┘  │        │
+│                                     └──────────────────────────────┘        │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Action Space (Paper Style)
+### Observation Space
 
-Following the KataCR paper, actions are continuous:
-- `delay` ∈ [0, 20]: frames to wait before acting
-- `pos_x` ∈ [0, 1]: normalized x position
-- `pos_y` ∈ [0, 1]: normalized y position  
-- `card` ∈ {0, 1, 2, 3}: which card to play
+```
+State Grid: (15, 32, 18) spatial tensor
+├── Channels 0-9:   Unit category one-hot encoding
+├── Channel 10-11:  Enemy/Friendly flag
+├── Channel 12:     Unit health (normalized)
+├── Channel 13:     Elixir (0-10 normalized)
+└── Channel 14:     Game time (normalized)
+```
 
-The model learns **when to act** (delay prediction) rather than acting every frame.
+### Action Space
+
+Discrete action space with 324 actions:
+- 4 cards × 81 grid positions (9×9 deployment grid)
+
+---
+
+## Quick Start
+
+### Machine A (GPU Server - Training)
+
+```bash
+# 1. Clone repositories
+git clone <this-repo> clash-royale-complete
+cd clash-royale-complete
+
+# 2. Setup Python environment  
+python3.11 -m venv .venv
+source .venv/bin/activate
+
+# 3. Install dependencies
+cd clash-royale-mbrl
+pip install -r requirements-frozen.txt
+
+# 4. Download KataCR weights
+python scripts/download_weights.py
+
+# 5. Start training server (listens for frames from Machine B)
+python train_online.py --use-remote-frames --rpc-host 0.0.0.0 --rpc-port 50051
+```
+
+### Machine B (Mac - Emulator)
+
+```bash
+# 1. Start Android emulator with Clash Royale
+# 2. Navigate to Training Camp
+# 3. Run the frame streaming client
+python scripts/remote_client_loop.py --server-host <MACHINE_A_IP> --server-port 50051
+```
 
 ---
 
 ## Installation
 
-### Requirements
+### System Requirements
 
-- macOS with Apple Silicon (M1/M2/M3) OR Linux with CUDA
+**Machine A (Training Server):**
+- Linux with NVIDIA GPU (tested on GCP n1-standard-4 + Tesla T4)
+- CUDA 12.x compatible driver
 - Python 3.11+
-- Android Studio with emulator (1080x2400 resolution)
+
+**Machine B (Emulator Host):**
+- macOS or Linux
+- Android Studio with emulator (1080×2400 resolution)
 - ADB (Android Debug Bridge)
 
-### Dependencies
+### Verified Package Versions (Linux CUDA 12)
 
-```bash
-# Create virtual environment
-python -m venv ../.venv
-source ../.venv/bin/activate
+| Package | Version | Notes |
+|---------|---------|-------|
+| jax | 0.4.26 | Must init before PyTorch! |
+| jaxlib | 0.4.26+cuda12.cudnn89 | CUDA 12 build |
+| torch | 2.1.2+cu121 | CUDA 12.1 |
+| flax | 0.8.1 | JAX neural networks |
+| orbax-checkpoint | 0.4.4 | JAX checkpointing |
+| ultralytics | 8.1.24 | YOLOv8 for detection |
+| paddlepaddle-gpu | 2.6.1 | OCR support |
+| grpcio | 1.76.0 | Frame streaming |
+| numpy | 1.26.4 | |
 
-# Install packages
-pip install torch torchvision torchaudio  # PyTorch with MPS
-pip install numpy opencv-python tqdm
-pip install ultralytics==8.1.24  # For KataCR YOLOv8
+See `requirements-frozen.txt` for complete list.
 
-# Or use requirements file
-pip install -r requirements-apple-silicon.txt
+### ⚠️ Critical: JAX/PyTorch CUDA Conflict
+
+JAX must initialize CUDA **before** PyTorch is imported. The training script handles this automatically, but if you're writing custom code:
+
+```python
+# CORRECT ORDER - JAX first!
+import jax
+jax.devices()  # Force CUDA initialization
+
+import torch  # Now safe to import
+
+# WRONG - will cause "cuSOLVER not found" error
+import torch
+import jax  # Too late - CUDA already broken
 ```
-
-### KataCR Detector Weights
-
-Download from [KataCR Releases](https://github.com/wty-yy/KataCR/releases):
-- `detector1_v0.7.13.pt` → `KataCR/runs/detector1_v0.7.13/weights/best.pt`
-- `detector2_v0.7.13.pt` → `KataCR/runs/detector2_v0.7.13/weights/best.pt`
-
-### Expert Replay Dataset
-
-```bash
-git clone https://github.com/wty-yy/Clash-Royale-Replay-Dataset
-# Uses: Clash-Royale-Replay-Dataset/fast_hog_2.6/
-```
-
----
-
-## Training
-
-### Offline Training (Recommended Start)
-
-Train on expert replays without needing emulators:
-
-```bash
-source ../.venv/bin/activate
-
-# Quick test (~15 min)
-python train_offline_fast.py --epochs 5 --steps-per-epoch 300
-
-# Full training (~1 hour)  
-python train_offline_fast.py --epochs 30 --steps-per-epoch 1000
-
-# Paper-style with delay prediction
-python train_paper.py --epochs 30
-```
-
-Checkpoints saved to `logs/fast_YYYYMMDD_HHMMSS/`
-
-### Online Training (3 Parallel Emulators)
-
-For faster learning with real gameplay:
-
-```bash
-# 1. Create 3 emulator AVDs in Android Studio
-#    Names: Pixel_6, Pixel_6_2, Pixel_6_3
-#    Resolution: 1080x2400
-
-# 2. Start emulators on different ports
-emulator -avd Pixel_6 -port 5554 &
-emulator -avd Pixel_6_2 -port 5556 &
-emulator -avd Pixel_6_3 -port 5558 &
-
-# 3. Install Clash Royale and login with DIFFERENT accounts
-#    (Supercell only allows 1 login per account)
-#    Use Guest accounts for testing
-
-# 4. Go to Training Camp on each emulator
-
-# 5. Run online training
-python train_live.py --n-envs 3
-```
-
-Workers collect experience → Replay Buffer → World Model Training → Imagination → Actor-Critic
-
----
-
-## Live Play
-
-```bash
-# Start emulator with Clash Royale open
-adb devices  # Verify: "emulator-5554 device"
-
-# Run agent
-python play_live.py --checkpoint logs/fast_*/best.pt --debug
-
-# Paper-style model
-python play_paper.py --checkpoint logs/paper_*/best.pt
-```
-
-The agent will:
-1. Wait for battle to start (detects elixir bar)
-2. Play cards during battle
-3. Wait for next battle when game ends
 
 ---
 
@@ -191,18 +152,35 @@ The agent will:
 
 ```
 clash-royale-mbrl/
-├── train_offline_fast.py   # Offline DreamerV3 training (discrete actions)
-├── train_paper.py          # Paper-style training (delay + continuous)
-├── train_live.py           # Online training with parallel emulators
-├── play_live.py            # Live gameplay agent
-├── play_paper.py           # Paper-style live agent
+├── train_online.py             # Main training entry (gRPC server + Dreamer)
+├── requirements-frozen.txt     # Pinned package versions (working)
+├── requirements-apple-silicon.txt  # macOS deps
+│
+├── scripts/
+│   ├── remote_client_loop.py   # Machine B: streams frames to server
+│   ├── serve_frame_service.py  # Standalone gRPC server (no training)
+│   ├── download_weights.py     # Download KataCR model weights
+│   └── interactive_setup.py    # Guided setup wizard
+│
 ├── src/
-│   ├── agent/              # DreamerV3 model components
-│   ├── environment/        # Clash Royale env wrapper
-│   ├── perception/         # KataCR YOLOv8 integration
-│   └── utils/              # Helpers
-├── logs/                   # Training checkpoints
-└── scripts/                # Setup utilities
+│   ├── cr/rpc/v1/
+│   │   ├── processor.py        # Frame processing (perception → grid)
+│   │   └── server.py           # gRPC server scaffold
+│   │
+│   ├── environment/
+│   │   ├── online_env.py       # Gym env wrapper
+│   │   ├── remote_bridge.py    # Connects gRPC to Dreamer
+│   │   └── emulator_env.py     # ADB interaction
+│   │
+│   ├── perception/
+│   │   └── katacr_pipeline.py  # KataCR integration
+│   │
+│   └── specs.py                # Observation/action specs
+│
+├── proto/
+│   └── frame_service.proto     # gRPC service definition
+│
+└── logs_online/                # Training checkpoints & TensorBoard
 ```
 
 ---
@@ -211,62 +189,87 @@ clash-royale-mbrl/
 
 | File | Description |
 |------|-------------|
-| `train_offline_fast.py` | Offline training on expert replays, discrete 37-action space |
-| `train_paper.py` | Paper-style training with delay prediction, continuous actions |
-| `train_live.py` | Online DreamerV3 with 3 parallel emulators |
-| `play_live.py` | Live agent using trained model |
-| `play_paper.py` | Paper-style live agent with delay threshold |
+| `train_online.py` | Entry point: starts gRPC server + Dreamer training loop |
+| `src/cr/rpc/v1/processor.py` | Processes frames: KataCR perception → state grid |
+| `src/environment/remote_bridge.py` | Bridges gRPC observations to Dreamer sampler |
+| `scripts/remote_client_loop.py` | Client: captures emulator frames, sends to server |
+
+---
+
+## Training Flow
+
+1. **Machine B** captures BGR frame from Android emulator
+2. **Machine B** sends frame via gRPC to Machine A
+3. **Machine A** runs KataCR perception:
+   - YOLOv8 detects units, buildings, spells
+   - CardClassifier (JAX) identifies hand cards
+   - PaddleOCR reads game time
+4. **Machine A** encodes state into (15, 32, 18) grid
+5. **Machine A** feeds grid to Dreamer, gets action
+6. **Machine A** returns action via gRPC response
+7. **Machine B** executes tap on emulator
+8. Repeat until match ends (detected by OK button color)
 
 ---
 
 ## Configuration
 
-### Screen Coordinates (1080x2400)
+### gRPC Server Settings
 
-```python
-CARD_POSITIONS = [(270, 2220), (460, 2220), (650, 2220), (840, 2220)]
-ARENA_LEFT, ARENA_RIGHT = 60, 1020
-DEPLOY_TOP, DEPLOY_BOTTOM = 1200, 1800
-ELIXIR_ROI = (200, 2300, 1050, 2400)
+```bash
+python train_online.py \
+  --use-remote-frames \
+  --rpc-host 0.0.0.0 \    # Listen on all interfaces
+  --rpc-port 50051 \      # gRPC port
+  --num-envs 1 \          # Number of parallel environments
+  --batch-T 8             # Trajectory length per batch
 ```
 
-### Model Hyperparameters
+### Firewall (GCP)
 
-```python
-HIDDEN_DIM = 256
-DETER_DIM = 256      # GRU hidden state
-STOCH_DIM = 32       # Stochastic latent
-SEQ_LENGTH = 50      # Training sequence length
-HORIZON = 15         # Imagination horizon
+Ensure port 50051 is open:
+```bash
+gcloud compute firewall-rules create allow-grpc \
+  --allow tcp:50051 \
+  --source-ranges 0.0.0.0/0
 ```
 
 ---
 
 ## Troubleshooting
 
+### "cuSOLVER not found" / JAX falls back to CPU
+
+**Cause:** PyTorch initialized CUDA before JAX.
+
+**Fix:** The training script now forces JAX initialization first. If using custom code, import JAX and call `jax.devices()` before any PyTorch imports.
+
+### "CardClassifier fell back to dummy mode"
+
+**Cause:** JAX couldn't load checkpoint (CUDA not available or checkpoint was saved with different device).
+
+**Fix:** Ensure JAX has CUDA access (`jax.devices()` should show `cuda(id=0)`).
+
 ### "No emulator found"
+
 ```bash
 adb kill-server && adb start-server
-adb devices
+adb devices  # Should show "emulator-5554 device"
 ```
 
-### "Model keeps losing"
-- Ensure training data is from same deck
-- Try paper-style training with delay prediction
-- Increase training epochs
+### gRPC connection refused
 
-### "KataCR not found"
-```bash
-# Check KataCR is cloned at correct path
-ls ../KataCR/runs/detector1_v0.7.13/weights/best.pt
-```
+1. Check server is running: `netstat -tlnp | grep 50051`
+2. Check firewall allows port 50051
+3. Verify IP address in client matches server
 
 ---
 
 ## References
 
 - [KataCR: A Non-Embedded AI Agent for Clash Royale](https://github.com/wty-yy/KataCR)
-- [DreamerV3: Mastering Diverse Domains through World Models](https://arxiv.org/abs/2301.04104)
+- [Dreamer: Dream to Control](https://arxiv.org/abs/1912.01603)
+- [DreamerV3: Mastering Diverse Domains](https://arxiv.org/abs/2301.04104)
 - [Clash Royale Replay Dataset](https://github.com/wty-yy/Clash-Royale-Replay-Dataset)
 
 ---

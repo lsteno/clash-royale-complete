@@ -68,3 +68,5 @@ outputs/
 *.tmp
 *.swp
 *.swo
+clash-royale-mbrl/logs_online/*
+*.deb

@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 from src.environment.online_env import ActionMapper, DEFAULT_DEPLOY_CELLS
+from rlpyt.envs.base import EnvSpaces
 
 
 @dataclass
@@ -54,8 +55,8 @@ class RemoteClashRoyaleEnv:
 
     def __init__(self, bridge: RemoteBridge, obs_space, act_space):
         self._bridge = bridge
-        self.observation_space = obs_space
-        self.action_space = act_space
+        self._observation_space = obs_space
+        self._action_space = act_space
         self._current: Optional[RemoteStep] = None
         self._mapper = ActionMapper(DEFAULT_DEPLOY_CELLS)
 
@@ -89,3 +90,20 @@ class RemoteClashRoyaleEnv:
 
     def close(self):
         self._current = None
+
+    @property
+    def observation_space(self):
+        return self._observation_space
+
+    @property
+    def action_space(self):
+        return self._action_space
+
+    @property
+    def spaces(self):
+        # rlpyt expects an EnvSpaces tuple providing observation/action spaces
+        return EnvSpaces(observation=self._observation_space, action=self._action_space)
+
+    @property
+    def horizon(self):
+        return None

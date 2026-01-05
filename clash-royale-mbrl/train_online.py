@@ -13,6 +13,47 @@ DREAMER_ROOT = REPO_ROOT / "dreamer-pytorch"
 if str(DREAMER_ROOT) not in sys.path:
     sys.path.insert(0, str(DREAMER_ROOT))
 
+# Ensure project src package is importable when running from source checkout.
+SRC_ROOT = CURRENT_DIR / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+import jax
+
+# CRITICAL: Force JAX CUDA initialization BEFORE any torch imports!
+# PyTorch and JAX conflict if torch initializes CUDA first - JAX's cuSOLVER check fails.
+# Calling jax.devices() triggers the backend initialization.
+_jax_devices = jax.devices()
+print(f"[train_online] JAX initialized with devices: {_jax_devices}")
+
+# Newer JAX drops define_bool_state; flax still calls it. Prefer the upstream helper
+# from jax._src.config when missing, otherwise fall back to a minimal stub compatible
+# with the current add_option signature (name, holder, opt_type, meta_args, meta_kwargs).
+if not hasattr(jax.config, "define_bool_state"):
+    try:
+        from jax._src import config as _jax_config_mod  # type: ignore
+
+        _define_bool_state = getattr(_jax_config_mod, "define_bool_state", None)
+    except Exception:  # pragma: no cover - safety net for exotic installs
+        _define_bool_state = None
+
+    if _define_bool_state is None:
+        class _FlagHolder:
+            def __init__(self, value: bool):
+                self.value = bool(value)
+
+            def _set(self, value: bool) -> None:
+                self.value = bool(value)
+
+        def _define_bool_state(name: str, default: bool, help: str):
+            holder = _FlagHolder(default)
+            jax.config.add_option(name, holder, bool, [], {"help": help})
+            # Mirror the property jax uses so config.<name> returns the holder value.
+            setattr(type(jax.config), name, property(lambda self, _n=name: self._read(_n)))
+            return holder
+
+    jax.config.define_bool_state = _define_bool_state
+
 import torch
 import gym
 import numpy as np
@@ -34,6 +75,13 @@ from dreamer.envs.wrapper import make_wapper
 from src.environment.emulator_env import EmulatorConfig
 from src.environment.online_env import ClashRoyaleDreamerEnv, OnlineEnvConfig
 from src.environment.remote_bridge import RemoteBridge, RemoteClashRoyaleEnv
+
+# Some downstream deps mutate sys.path; force our in-repo packages to the front.
+sys.path.insert(0, str(SRC_ROOT))
+
+# Debug path to ensure cr/* is importable at runtime.
+print("[train_online] sys.path head", sys.path[:5])
+
 from cr.rpc.v1.processor import FrameServiceProcessor, ProcessorConfig
 from cr.rpc.v1.server import RpcServerConfig, serve_forever
 from src.specs import ACTION_SPEC, OBS_SPEC
@@ -156,10 +204,13 @@ def main() -> None:
             proc_cfg = ProcessorConfig()
             processor = FrameServiceProcessor(proc_cfg, bridge=bridge)
             server_cfg = RpcServerConfig(host=cfg.rpc_host, port=cfg.rpc_port)
+            print(f"[train_online] gRPC FrameService listening on {cfg.rpc_host}:{cfg.rpc_port}")
             asyncio.run(serve_forever(processor, server_cfg))
 
         server_thread = threading.Thread(target=_run_server, daemon=True)
         server_thread.start()
+        import time as _time
+        _time.sleep(2)  # Give server thread time to initialize
 
     algo = Dreamer(horizon=10, kl_scale=0.1, use_pcont=True)
     agent = AtariDreamerAgent(

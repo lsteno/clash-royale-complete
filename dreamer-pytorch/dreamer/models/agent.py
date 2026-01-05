@@ -53,7 +53,8 @@ class AgentModel(nn.Module):
             embed_size=decoder_embed_size, shape=image_shape
         )
         self.action_shape = action_shape
-        output_size = np.prod(action_shape)
+        # np.prod returns float for empty shape tuples (e.g., Discrete). Cast to int for nn.Linear sizes.
+        output_size = int(np.prod(action_shape))
         self.transition = RSSMTransition(
             output_size, stochastic_size, deterministic_size, hidden_size
         )
