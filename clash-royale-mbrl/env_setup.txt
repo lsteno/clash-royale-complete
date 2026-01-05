@@ -1,0 +1,20 @@
+# 100-150GB disk space
+# Deep Learning VM with CUDA 11.8 M126
+
+conda create -n paddle_v1  python==3.11
+conda activate paddle_v1
+conda install -c conda-forge cudatoolkit=11.8 cudnn=8.9
+pip install uv
+uv pip install "jax[cuda11]==0.4.25" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+conda install pytorch==2.2.2 torchvision==0.17.2 torchaudio==2.2.2 -c pytorch
+python -m pip install paddlepaddle-gpu==2.6.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu118/
+uv pip install -U pip setuptools wheel
+pip install "git+https://github.com/astooke/rlpyt.git"
+uv pip install "numpy==1.26.4"
+uv  pip install psutil pyprind tqdm==4.66.2 tensorboardX==2.6.2.2 gym mss 
+uv pip install jaxlib==0.4.25
+uv pip install  flax==0.8.2 optax==0.2.2 chex==0.1.86
+uv pip install matplotlib==3.8.2 ultralytics==8.1.24  wandb==0.16.4  Pillow==10.3.0 pandas
+uv pip install lapx>=0.5.2
+uv pip install paddleocr==2.7.2 
+uv pip install opencv-fixer==0.2.5
