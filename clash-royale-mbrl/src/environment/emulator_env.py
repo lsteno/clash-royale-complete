@@ -104,6 +104,9 @@ class EmulatorConfig:
     ui_probe_log_every: float = 1.5  # Minimum seconds between probe logs
     ui_probe_save_frames: bool = False  # Save frames when probes fail to match
     ui_probe_dir: Path = Path("logs/ui_probe")
+    ok_button_screen: Tuple[int, int] = (613, 2021)  # Screen-space coords at 1080x2400
+    ok_button_color_bgr: Tuple[int, int, int] = (255, 187, 104)  # Target BGR of OK button
+    ok_button_tol: int = 40  # Per-channel tolerance for OK color match
 
 
 class ADBController:
@@ -350,7 +353,7 @@ class ClashRoyaleEmulatorEnv:
         frame = self.get_observation_bgr()  # BGR, already normalized to canonical size
 
         # Screen-space coordinates provided by user (for 1080x2400 reference)
-        ok_screen = (613, 2021)      # expected color #44beff (BGR: 255,190,68)
+        ok_screen = self.config.ok_button_screen      # expected color #44beff (BGR: 255,190,68)
 
         ok_px = self._screen_to_frame_coords(*ok_screen, frame)
 
@@ -359,8 +362,8 @@ class ClashRoyaleEmulatorEnv:
         # Use a small patch average to avoid resize artifacts
         ok_mean = self._sample_patch(frame, ok_px, radius=2)
 
-        ok_color = (255, 187, 104)
-        ok_hit = self._matches_color(ok_mean, ok_color, tol=40)
+        ok_color = self.config.ok_button_color_bgr
+        ok_hit = self._matches_color(ok_mean, ok_color, tol=self.config.ok_button_tol)
 
         # One-shot detection: end match as soon as the probe hits.
         self._ok_hit_streak = 1 if ok_hit else 0

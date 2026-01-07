@@ -13,13 +13,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import time
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
 
 from cr.rpc.v1.client import FrameServiceClient, RpcClientConfig
 from cr.rpc.v1 import frame_service_pb2 as pb2
-from src.environment.emulator_env import ClashRoyaleEmulatorEnv
+from src.environment.emulator_env import ClashRoyaleEmulatorEnv, EmulatorConfig
 
 
 def parse_args() -> argparse.Namespace:
@@ -29,7 +30,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-inflight", type=int, default=2, help="Max in-flight RPCs")
     parser.add_argument("--want-action", action="store_true", help="Request action from server")
     parser.add_argument("--fps", type=float, default=5.0, help="Capture/send rate")
+    parser.add_argument("--ui-probe-save", action="store_true", help="Save annotated UI probe frames")
+    parser.add_argument("--ui-probe-dir", type=str, default=None, help="Directory to save UI probe frames")
+    parser.add_argument("--ui-probe-log-every", type=float, default=None, help="Seconds between UI probe logs")
+    parser.add_argument("--ok-screen", type=str, default=None, help="Override OK button screen coords as x,y (1080x2400 ref)")
+    parser.add_argument("--ok-color-bgr", type=str, default=None, help="Override OK button BGR color as b,g,r")
+    parser.add_argument("--ok-tol", type=int, default=None, help="Override OK button color tolerance")
     return parser.parse_args()
+
+
+def _parse_pair(text: str) -> tuple[int, int]:
+    parts = [p.strip() for p in text.split(",")]
+    if len(parts) != 2:
+        raise ValueError("expected two comma-separated integers")
+    return int(parts[0]), int(parts[1])
+
+
+def _parse_triplet(text: str) -> tuple[int, int, int]:
+    parts = [p.strip() for p in text.split(",")]
+    if len(parts) != 3:
+        raise ValueError("expected three comma-separated integers")
+    return int(parts[0]), int(parts[1]), int(parts[2])
 
 
 def _frame_to_bytes(frame: np.ndarray) -> tuple[bytes, int, int, int]:
@@ -38,7 +59,20 @@ def _frame_to_bytes(frame: np.ndarray) -> tuple[bytes, int, int, int]:
 
 
 async def main_async(args: argparse.Namespace) -> None:
-    env = ClashRoyaleEmulatorEnv()
+    cfg_kwargs = {}
+    if args.ui_probe_dir:
+        cfg_kwargs["ui_probe_dir"] = Path(args.ui_probe_dir)
+    if args.ui_probe_log_every is not None:
+        cfg_kwargs["ui_probe_log_every"] = args.ui_probe_log_every
+    if args.ok_screen:
+        cfg_kwargs["ok_button_screen"] = _parse_pair(args.ok_screen)
+    if args.ok_color_bgr:
+        cfg_kwargs["ok_button_color_bgr"] = _parse_triplet(args.ok_color_bgr)
+    if args.ok_tol is not None:
+        cfg_kwargs["ok_button_tol"] = args.ok_tol
+    cfg_kwargs["ui_probe_save_frames"] = args.ui_probe_save
+    cfg = EmulatorConfig(**cfg_kwargs)
+    env = ClashRoyaleEmulatorEnv(cfg)
     cfg = RpcClientConfig(target=args.target, deadline_ms=args.deadline_ms, max_inflight=args.max_inflight)
     client = FrameServiceClient(cfg)
     await client.connect()
