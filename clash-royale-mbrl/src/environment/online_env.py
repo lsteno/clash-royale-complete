@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Iterable, List, Optional, Sequence, Tuple
 
@@ -9,6 +11,12 @@ from rlpyt.envs.base import Env, EnvStep
 from rlpyt.spaces.float_box import FloatBox
 
 from dreamer.envs.env import EnvInfo
+
+# Ensure KataCR package is importable when running from this repo checkout.
+KATACR_ROOT = Path(__file__).resolve().parents[3] / "KataCR"
+if str(KATACR_ROOT) not in sys.path:
+    sys.path.insert(0, str(KATACR_ROOT))
+
 from katacr.constants.card_list import card2elixir, card_list
 from katacr.constants.label_list import (
     flying_unit_list,
