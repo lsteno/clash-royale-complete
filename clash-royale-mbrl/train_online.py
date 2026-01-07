@@ -151,7 +151,9 @@ def build_sampler(cfg: TrainConfig) -> SerialSampler:
         act_space = gym.spaces.Discrete(ACTION_SPEC.size)
 
         def env_factory():
-            return RemoteClashRoyaleEnv(bridge, obs_space, act_space)
+            # Create the remote env and wrap with OneHotAction for Dreamer compatibility.
+            base_env = RemoteClashRoyaleEnv(bridge, obs_space, act_space)
+            return OneHotAction(base_env)
 
         env_kwargs = {}
         sampler = SerialSampler(

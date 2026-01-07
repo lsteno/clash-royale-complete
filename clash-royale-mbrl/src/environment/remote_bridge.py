@@ -14,7 +14,8 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 from src.environment.online_env import ActionMapper, DEFAULT_DEPLOY_CELLS
-from rlpyt.envs.base import EnvSpaces
+from rlpyt.envs.base import EnvSpaces, EnvStep
+from dreamer.envs.env import EnvInfo
 
 
 @dataclass
@@ -59,10 +60,13 @@ class RemoteClashRoyaleEnv:
         self._action_space = act_space
         self._current: Optional[RemoteStep] = None
         self._mapper = ActionMapper(DEFAULT_DEPLOY_CELLS)
+        self._episode_return = 0.0
+        self.random = np.random.RandomState()  # required by OneHotAction wrapper
 
     def reset(self):
         # Block until the first frame arrives from Machine B.
         self._current = self._bridge.next_step()
+        self._episode_return = 0.0
         return self._current.obs
 
     def step(self, action):
@@ -72,7 +76,13 @@ class RemoteClashRoyaleEnv:
         self._current.set_action(self._decode_action(action))
         # Block until next frame arrives.
         self._current = self._bridge.next_step()
-        return self._current.obs, float(self._current.reward), bool(self._current.done), self._current.info
+        reward = float(self._current.reward)
+        done = bool(self._current.done)
+        self._episode_return += reward
+        # rlpyt expects EnvInfo namedtuple, not dict
+        discount = np.array(0.0 if done else 1.0, dtype=np.float32)
+        env_info = EnvInfo(discount, self._episode_return, done)
+        return EnvStep(self._current.obs, reward, done, env_info)
 
     def _decode_action(self, action) -> Optional[Tuple[int, int, int]]:
         # action can be tuple or discrete index depending on sampler
