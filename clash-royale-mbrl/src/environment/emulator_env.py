@@ -104,6 +104,7 @@ class EmulatorConfig:
     ui_probe_log_every: float = 1.5  # Minimum seconds between probe logs
     ui_probe_save_frames: bool = False  # Save frames when probes fail to match
     ui_probe_dir: Path = Path("logs/ui_probe")
+    ui_probe_save_after_s: float = 120.0  # Force saving annotated probes after this uptime
     ok_button_screen: Tuple[int, int] = (613, 2021)  # Screen-space coords at 1080x2400
     ok_button_color_bgr: Tuple[int, int, int] = (255, 187, 104)  # Target BGR of OK button
     ok_button_tol: int = 40  # Per-channel tolerance for OK color match
@@ -295,6 +296,7 @@ class ClashRoyaleEmulatorEnv:
             else None
         )
         self._last_ui_probe_log = 0.0
+        self._ui_probe_start_time = time.time()
         self._ok_hit_streak = 0  # consecutive frames meeting OK-button color
         
         # Screen regions (normalized 0-1)
@@ -348,9 +350,14 @@ class ClashRoyaleEmulatorEnv:
             return frame[cy, cx]
         return patch.mean(axis=(0, 1))
 
-    def is_match_over(self) -> bool:
-        """Detect end-of-match UI by sampling the OK button color and debouncing across frames."""
-        frame = self.get_observation_bgr()  # BGR, already normalized to canonical size
+    def is_match_over(self, frame: Optional[np.ndarray] = None) -> bool:
+        """Detect end-of-match UI by sampling the OK button color and debouncing across frames.
+
+        Args:
+            frame: Optional pre-captured BGR frame. If omitted, capture a fresh frame.
+        """
+        if frame is None:
+            frame = self.get_observation_bgr()  # BGR, already normalized to canonical size
 
         # Screen-space coordinates provided by user (for 1080x2400 reference)
         ok_screen = self.config.ok_button_screen      # expected color #44beff (BGR: 255,190,68)
@@ -370,14 +377,16 @@ class ClashRoyaleEmulatorEnv:
         match_over = ok_hit
 
         now = time.time()
-        if self.config.ui_probe_debug and (now - self._last_ui_probe_log) >= self.config.ui_probe_log_every:
+        should_log = (now - self._last_ui_probe_log) >= self.config.ui_probe_log_every
+        force_save = (now - self._ui_probe_start_time) >= self.config.ui_probe_save_after_s
+        if self.config.ui_probe_debug and should_log:
             self._last_ui_probe_log = now
             ok_dist = self._color_distance(ok_mean, ok_color)
             print(
                 f"[UIProbe] ok@{ok_px} bgr={ok_pixel.tolist()} mean={ok_mean.round(1).tolist()} dist={ok_dist} hit={ok_hit} streak={self._ok_hit_streak}"
             )
 
-            if self.config.ui_probe_save_frames:
+            if self.config.ui_probe_save_frames or force_save:
                 # Save an annotated frame showing where the probe sampled.
                 annotated = frame.copy()
                 cv2.circle(annotated, ok_px, 6, (0, 0, 255), thickness=2)

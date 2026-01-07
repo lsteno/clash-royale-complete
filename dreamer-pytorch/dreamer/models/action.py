@@ -60,7 +60,36 @@ class ActionDecoder(nn.Module):
             dist = torch.distributions.Independent(dist, 1)
             dist = SampleDist(dist)
         elif self.dist == "one_hot":
+            x = self._apply_mask(x)
             dist = torch.distributions.OneHotCategorical(logits=x)
         elif self.dist == "relaxed_one_hot":
+            x = self._apply_mask(x)
             dist = torch.distributions.RelaxedOneHotCategorical(0.1, logits=x)
         return dist
+
+    def _apply_mask(self, logits: torch.Tensor) -> torch.Tensor:
+        """Additive action mask: illegal actions get large negative logits.
+
+        Mask is pulled from src.environment.action_mask if available. When the
+        mask is None or shapes are incompatible, logits are returned unchanged.
+        """
+
+        try:
+            from src.environment.action_mask import get_action_mask
+
+            mask = get_action_mask()
+        except Exception:
+            return logits
+        if mask is None:
+            return logits
+        try:
+            mask_t = torch.as_tensor(mask, device=logits.device, dtype=logits.dtype)
+        except Exception:
+            return logits
+        if mask_t.numel() != logits.shape[-1]:
+            return logits
+        while mask_t.dim() < logits.dim():
+            mask_t = mask_t.unsqueeze(0)
+        if mask_t.shape != logits.shape:
+            mask_t = mask_t.expand_as(logits)
+        return logits + mask_t

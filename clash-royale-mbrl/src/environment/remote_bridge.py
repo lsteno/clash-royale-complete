@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 from src.environment.online_env import ActionMapper, DEFAULT_DEPLOY_CELLS
+from src.environment.action_mask import compute_action_mask, set_action_mask
 from rlpyt.envs.base import EnvSpaces, EnvStep
 from dreamer.envs.env import EnvInfo
 
@@ -79,6 +80,7 @@ class RemoteClashRoyaleEnv:
         self._bridge.set_ready()
         # Block until the first frame arrives from Machine B.
         self._current = self._bridge.next_step()
+        self._apply_action_mask()
         self._episode_return = 0.0
         # Set no-op action to unblock the gRPC handler that's waiting for a response.
         # During reset, we don't take any action.
@@ -92,6 +94,7 @@ class RemoteClashRoyaleEnv:
         self._current.set_action(self._decode_action(action))
         # Block until next frame arrives.
         self._current = self._bridge.next_step()
+        self._apply_action_mask()
         reward = float(self._current.reward)
         done = bool(self._current.done)
         self._episode_return += reward
@@ -99,6 +102,12 @@ class RemoteClashRoyaleEnv:
         discount = np.array(0.0 if done else 1.0, dtype=np.float32)
         env_info = EnvInfo(discount, self._episode_return, done)
         return EnvStep(self._current.obs, reward, done, env_info)
+
+    def _apply_action_mask(self) -> None:
+        info = self._current.info if self._current is not None else {}
+        cards = info.get("cards") if isinstance(info, dict) else None
+        elixir = info.get("elixir") if isinstance(info, dict) else 0
+        set_action_mask(compute_action_mask(cards, elixir))
 
     def _decode_action(self, action) -> Optional[Tuple[int, int, int]]:
         # action can be tuple or discrete index depending on sampler

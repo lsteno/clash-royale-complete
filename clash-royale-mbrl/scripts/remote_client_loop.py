@@ -30,9 +30,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-inflight", type=int, default=2, help="Max in-flight RPCs")
     parser.add_argument("--want-action", action="store_true", help="Request action from server")
     parser.add_argument("--fps", type=float, default=5.0, help="Capture/send rate")
+    parser.add_argument("--scrcpy-title", type=str, default="Android", help="scrcpy window title to capture")
+    parser.add_argument("--capture-region", type=str, default=None, help="Override capture region as left,top,width,height (pixels)")
+    parser.add_argument("--no-adb-fallback", action="store_true", help="Disable adb screencap fallback (fail if scrcpy capture fails)")
     parser.add_argument("--ui-probe-save", action="store_true", help="Save annotated UI probe frames")
     parser.add_argument("--ui-probe-dir", type=str, default=None, help="Directory to save UI probe frames")
     parser.add_argument("--ui-probe-log-every", type=float, default=None, help="Seconds between UI probe logs")
+    parser.add_argument("--ui-probe-every-frame", action="store_true", help="Force UI probe log on every frame")
     parser.add_argument("--ok-screen", type=str, default=None, help="Override OK button screen coords as x,y (1080x2400 ref)")
     parser.add_argument("--ok-color-bgr", type=str, default=None, help="Override OK button BGR color as b,g,r")
     parser.add_argument("--ok-tol", type=int, default=None, help="Override OK button color tolerance")
@@ -53,6 +57,14 @@ def _parse_triplet(text: str) -> tuple[int, int, int]:
     return int(parts[0]), int(parts[1]), int(parts[2])
 
 
+def _parse_quad(text: str) -> dict:
+    parts = [p.strip() for p in text.split(",")]
+    if len(parts) != 4:
+        raise ValueError("expected four comma-separated integers for left,top,width,height")
+    l, t, w, h = map(int, parts)
+    return {"left": l, "top": t, "width": w, "height": h}
+
+
 def _frame_to_bytes(frame: np.ndarray) -> tuple[bytes, int, int, int]:
     h, w, c = frame.shape
     return frame.tobytes(), w, h, c
@@ -62,8 +74,15 @@ async def main_async(args: argparse.Namespace) -> None:
     cfg_kwargs = {}
     if args.ui_probe_dir:
         cfg_kwargs["ui_probe_dir"] = Path(args.ui_probe_dir)
-    if args.ui_probe_log_every is not None:
+    if args.ui_probe_every_frame:
+        cfg_kwargs["ui_probe_log_every"] = 0.0
+    elif args.ui_probe_log_every is not None:
         cfg_kwargs["ui_probe_log_every"] = args.ui_probe_log_every
+    cfg_kwargs["scrcpy_window_title"] = args.scrcpy_title
+    if args.capture_region:
+        cfg_kwargs["capture_region"] = _parse_quad(args.capture_region)
+    if args.no_adb_fallback:
+        cfg_kwargs["enable_adb_fallback"] = False
     if args.ok_screen:
         cfg_kwargs["ok_button_screen"] = _parse_pair(args.ok_screen)
     if args.ok_color_bgr:
@@ -97,6 +116,11 @@ async def main_async(args: argparse.Namespace) -> None:
         while True:
             loop_start = time.time()
             frame = env.get_observation_bgr()
+            if args.ui_probe_every_frame:
+                try:
+                    env.is_match_over(frame)
+                except Exception as exc:
+                    print(f"[UIProbe] error while probing OK button: {exc}")
             frame_bytes, w, h, c = _frame_to_bytes(frame)
             ts = time.time()
             try:

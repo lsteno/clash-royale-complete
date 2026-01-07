@@ -27,6 +27,7 @@ from katacr.constants.label_list import (
     unit2idx,
 )
 
+from src.environment.action_mask import compute_action_mask, set_action_mask
 from src.environment.emulator_env import ClashRoyaleKataCREnv, EmulatorConfig
 from src.perception.katacr_pipeline import KataCRVisionConfig
 from src.specs import ACTION_SPEC, OBS_SPEC
@@ -305,6 +306,7 @@ class ClashRoyaleDreamerEnv(Env):
         elixir_value = self._coerce_number(result.state.get("elixir"), default=0.0)
         self._latest_elixir = int(max(0.0, elixir_value))
         self._latest_time = self._coerce_number(result.info.get("time"), default=0.0)
+        set_action_mask(compute_action_mask(self._latest_cards, self._latest_elixir))
         obs = self._encoder.encode(result.state, self._base.katacr.reward_builder, result.info)
         return obs, result
 

@@ -153,6 +153,12 @@ class Dreamer(RlAlgorithm):
 
     def optimize_agent(self, itr, samples=None, sampler_itr=None):
         itr = itr if sampler_itr is None else sampler_itr
+        try:  # Ensure action masking does not leak into imagination rollouts
+            from src.environment.action_mask import clear_action_mask
+
+            clear_action_mask()
+        except Exception:
+            pass
         if samples is not None:
             # Note: discount not saved here
             self.replay_buffer.append_samples(samples_to_buffer(samples))
