@@ -109,6 +109,7 @@ class FrameServiceProcessor:
             "server_ms": latency_ms,
             "timestamp": request.timestamp,
             "match_over": 1.0 if done_value else 0.0,
+            "game_time": float(perception_result.state.get("time", 0.0)),
         })
         return resp
 

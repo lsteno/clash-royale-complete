@@ -85,7 +85,13 @@ async def main_async(args: argparse.Namespace) -> None:
             
             # Detect if we're in battle by checking if OCR succeeded (game time detected)
             game_time = resp.info_num.get("game_time", 0.0)
-            if not resp.ocr_failed and game_time > 0:
+            ocr_failed = resp.ocr_failed
+            
+            # Debug: print OCR status on first few frames
+            if frame_id < 10:
+                print(f"  [debug] ocr_failed={ocr_failed} game_time={game_time} info_num keys={list(resp.info_num.keys())}")
+            
+            if not ocr_failed and game_time > 0:
                 in_battle = True
             elif match_over:
                 in_battle = False
