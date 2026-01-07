@@ -93,11 +93,11 @@ class EmulatorConfig:
     screen_width: int = 1080
     screen_height: int = 2400
     capture_region: Optional[dict] = None  # {"top": 0, "left": 0, "width": 1080, "height": 2400}
-    scrcpy_window_title: str = "Android"  # Window title to capture from
+    scrcpy_window_title: str = "scrcpy"  # Window title to capture from
     canonical_width: int = 576  # KataCR expects portrait 1280x576 (H/W ≈ 2.22)
     canonical_height: int = 1280
     enable_adb_fallback: bool = True
-    use_adb_capture_only: bool = False  # Set False to use scrcpy+mss (much faster!)
+    use_adb_capture_only: bool = False  # Use scrcpy (fast screen capture)
     auto_restart: bool = True  # Navigate back to Training Camp after each match automatically
     navigation: MatchNavigationConfig = field(default_factory=MatchNavigationConfig)
     ui_probe_debug: bool = True  # Log sampled UI button colors periodically
