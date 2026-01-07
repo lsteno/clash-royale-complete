@@ -214,7 +214,13 @@ def main() -> None:
         import time as _time
         _time.sleep(2)  # Give server thread time to initialize
 
-    algo = Dreamer(horizon=10, kl_scale=0.1, use_pcont=True)
+    algo = Dreamer(
+        horizon=10,
+        kl_scale=0.1,
+        use_pcont=True,
+        replay_size=100_000,  # Reduced from 5M - our obs is larger than Atari
+        prefill=1000,  # Start training sooner for debugging
+    )
     agent = AtariDreamerAgent(
         train_noise=0.4,
         eval_noise=0.0,
