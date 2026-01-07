@@ -1,4 +1,4 @@
-from ultralytics.utils.plotting import threaded, np, torch, math, cv2, Annotator, Path, ops, colors, contextlib
+from ultralytics.utils.plotting import threaded, np, torch, math, cv2, Annotator, Path, ops, colors
 @threaded
 def plot_images(
     images,
@@ -90,7 +90,10 @@ def plot_images(
     if on_plot:
         on_plot(fname)
 
-from ultralytics.utils.ops import xywh2xyxy, torch, xywh2xyxy, time, nms_rotated, torchvision, LOGGER
+import time
+import torchvision
+from ultralytics.utils.ops import xywh2xyxy, torch, xywh2xyxy
+from ultralytics.utils import LOGGER
 def non_max_suppression(
   prediction,
   conf_thres=0.25,
@@ -211,11 +214,9 @@ def non_max_suppression(
     c = x[:, 5:6] * (0 if agnostic else max_wh)  # classes
     scores = x[:, 4]  # scores
     if rotated:
-      boxes = torch.cat((x[:, :2] + c, x[:, 2:4], x[:, -1:]), dim=-1)  # xywhr
-      i = nms_rotated(boxes, scores, iou_thres)
-    else:
-      boxes = x[:, :4] + c  # boxes (offset by class)
-      i = torchvision.ops.nms(boxes, scores, iou_thres)  # NMS
+      LOGGER.warning("rotated NMS unavailable; falling back to axis-aligned NMS")
+    boxes = x[:, :4] + c  # boxes (offset by class)
+    i = torchvision.ops.nms(boxes, scores, iou_thres)  # NMS
     i = i[:max_det]  # limit detections
 
     # # Experimental

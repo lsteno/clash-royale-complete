@@ -1,9 +1,16 @@
-# yaml_load moved in some Ultralytics versions; import from track with a fallback to utils.
+from functools import partial
+from pathlib import Path
+
+import torch
+
+# Ultralytics moved YAML/yaml_load between utils and trackers; support both.
 try:
-  from ultralytics.trackers.track import check_yaml, IterableSimpleNamespace, yaml_load, partial, torch, Path
-except ImportError:  # older/newer versions may not export yaml_load here
-  from ultralytics.trackers.track import check_yaml, IterableSimpleNamespace, partial, torch, Path
-  from ultralytics.utils import yaml_load
+  from ultralytics.utils import YAML, IterableSimpleNamespace
+  from ultralytics.utils.checks import check_yaml
+  _yaml_loader = lambda cfg_path: YAML.load(cfg_path)
+except ImportError:  # fallback for older package layouts
+  from ultralytics.trackers.track import check_yaml, IterableSimpleNamespace, yaml_load as _yaml_loader
+  YAML = None
 from ultralytics.trackers.byte_tracker import BYTETracker, STrack, matching, TrackState, np, xywh2ltwh
 from ultralytics.trackers.bot_sort import BOTSORT
 
@@ -202,7 +209,7 @@ def on_predict_start(predictor: object, persist: bool = False) -> None:
     return
 
   tracker = check_yaml(predictor.args.tracker)
-  cfg = IterableSimpleNamespace(**yaml_load(tracker))
+  cfg = IterableSimpleNamespace(**_yaml_loader(tracker))
 
   if cfg.tracker_type not in ["bytetrack", "botsort"]:
     raise AssertionError(f"Only 'bytetrack' and 'botsort' are supported for now, but got '{cfg.tracker_type}'")
@@ -258,7 +265,7 @@ def cr_on_predict_start(detector, persist: bool = True) -> None:
     return
 
   tracker = check_yaml(detector.tracker_cfg_path)
-  cfg = IterableSimpleNamespace(**yaml_load(tracker))
+  cfg = IterableSimpleNamespace(**_yaml_loader(tracker))
 
   if cfg.tracker_type not in ["bytetrack", "botsort"]:
     raise AssertionError(f"Only 'bytetrack' and 'botsort' are supported for now, but got '{cfg.tracker_type}'")
