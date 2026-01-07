@@ -15,9 +15,12 @@ import cv2
 import mss
 import mss.tools
 import numpy as np
+from typing import TYPE_CHECKING
 
-from ..perception.katacr_pipeline import KataCRPerceptionEngine, KataCRVisionConfig
 from src.specs import OBS_SPEC
+
+if TYPE_CHECKING:  # Keep type hints without importing heavy deps at runtime
+    from ..perception.katacr_pipeline import KataCRPerceptionEngine, KataCRVisionConfig
 
 
 @dataclass(frozen=True)
@@ -498,8 +501,11 @@ class ClashRoyaleKataCREnv(ClashRoyaleEmulatorEnv):
     result, fps, frame = env.capture_state()
     """
 
-    def __init__(self, config: Optional[EmulatorConfig] = None, katacr_cfg: Optional[KataCRVisionConfig] = None):
+    def __init__(self, config: Optional[EmulatorConfig] = None, katacr_cfg: Optional["KataCRVisionConfig"] = None):
         super().__init__(config)
+        # Lazy import to avoid pulling heavy KataCR/JAX deps on lightweight clients
+        from ..perception.katacr_pipeline import KataCRPerceptionEngine
+
         self.katacr = KataCRPerceptionEngine(katacr_cfg)
         self.fps_logger = FPSLogger()
         self._match_active = False

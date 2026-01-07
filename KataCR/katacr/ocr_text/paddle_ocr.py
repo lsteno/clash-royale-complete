@@ -11,9 +11,55 @@ import cv2
 from paddleocr import PaddleOCR
 from paddleocr.tools.infer.predict_system import TextSystem
 import numpy as np
+import os
+import sys
 from pathlib import Path
 from katacr.build_dataset.constant import text_features_episode_end
 root_path = Path(__file__).parents[2]
+
+
+def _ensure_cudnn_symlinks() -> None:
+  """Best-effort fix for CUDA wheels that ship only versioned cuDNN .so files.
+
+  Paddle may dlopen("libcudnn.so") but the PyPI wheels often contain only
+  `libcudnn.so.8` (and friends). If the directory is on LD_LIBRARY_PATH, adding
+  these symlinks resolves the loader error without requiring root.
+  """
+  if sys.platform != 'linux':
+    return
+
+  py_ver = f"python{sys.version_info.major}.{sys.version_info.minor}"
+  candidates = [
+    Path(sys.prefix) / 'lib' / py_ver / 'site-packages' / 'nvidia' / 'cudnn' / 'lib',
+    Path(sys.prefix) / 'lib64' / py_ver / 'site-packages' / 'nvidia' / 'cudnn' / 'lib',
+  ]
+
+  cudnn_lib = next((p for p in candidates if p.exists()), None)
+  if cudnn_lib is None:
+    return
+
+  links = {
+    'libcudnn.so': 'libcudnn.so.8',
+    'libcudnn_cnn_infer.so': 'libcudnn_cnn_infer.so.8',
+    'libcudnn_cnn_train.so': 'libcudnn_cnn_train.so.8',
+    'libcudnn_ops_infer.so': 'libcudnn_ops_infer.so.8',
+    'libcudnn_ops_train.so': 'libcudnn_ops_train.so.8',
+    'libcudnn_adv_infer.so': 'libcudnn_adv_infer.so.8',
+    'libcudnn_adv_train.so': 'libcudnn_adv_train.so.8',
+  }
+
+  for link_name, target_name in links.items():
+    link_path = cudnn_lib / link_name
+    target_path = cudnn_lib / target_name
+    try:
+      if link_path.exists() or link_path.is_symlink():
+        continue
+      if not target_path.exists():
+        continue
+      os.symlink(target_name, link_path)
+    except Exception:
+      # Best effort only; if we can't write, user can create manually.
+      pass
 
 onnx_weight_paths = {
   'det': root_path / './runs/ocr/ch_PP-OCRv4_det_infer.onnx',
@@ -30,6 +76,10 @@ class OCR:
     kwargs = dict(use_onnx=onnx, use_tensorrt=tensorrt, use_gpu=use_gpu)
     if onnx:
       kwargs.update({(k + '_model_dir'): str(v) for k, v in onnx_weight_paths.items()})
+
+    if use_gpu:
+      _ensure_cudnn_symlinks()
+
     self.ocr = PaddleOCR(use_angle_cls=use_angle_cls, show_log=False, lang=lang, **kwargs)
     # self.save_count = 0  # DEBUG
   
