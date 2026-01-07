@@ -39,13 +39,24 @@ class RemoteStep:
 class RemoteBridge:
     """Thread-safe conduit between the gRPC processor and the trainer env."""
 
-    def __init__(self):
+    def __init__(self, action_timeout: float = 5.0):
         self._steps: "queue.Queue[RemoteStep]" = queue.Queue()
+        self._action_timeout = action_timeout
+        self._ready = threading.Event()  # Set when trainer is ready to consume
+
+    def set_ready(self) -> None:
+        """Signal that the trainer is ready to consume frames."""
+        self._ready.set()
 
     def publish(self, obs: np.ndarray, reward: float, done: bool, info: Dict[str, Any]) -> Optional[Tuple[int, int, int]]:
+        # If trainer isn't ready yet, return no-op immediately to avoid blocking gRPC
+        if not self._ready.is_set():
+            return None
         step = RemoteStep(obs=obs, reward=reward, done=done, info=info, _action_ready=threading.Event())
         self._steps.put(step)
-        return step.wait_action()
+        # Wait with timeout to avoid blocking forever if trainer stalls
+        action = step.wait_action(timeout=self._action_timeout)
+        return action
 
     def next_step(self, timeout: Optional[float] = None) -> RemoteStep:
         return self._steps.get(timeout=timeout)
@@ -64,6 +75,8 @@ class RemoteClashRoyaleEnv:
         self.random = np.random.RandomState()  # required by OneHotAction wrapper
 
     def reset(self):
+        # Signal that trainer is ready to consume frames (idempotent)
+        self._bridge.set_ready()
         # Block until the first frame arrives from Machine B.
         self._current = self._bridge.next_step()
         self._episode_return = 0.0
