@@ -97,7 +97,7 @@ class EmulatorConfig:
     canonical_width: int = 576  # KataCR expects portrait 1280x576 (H/W ≈ 2.22)
     canonical_height: int = 1280
     enable_adb_fallback: bool = True
-    use_adb_capture_only: bool = True  # Use adb screencap when scrcpy window coords are unknown
+    use_adb_capture_only: bool = False  # Set False to use scrcpy+mss (much faster!)
     auto_restart: bool = True  # Navigate back to Training Camp after each match automatically
     navigation: MatchNavigationConfig = field(default_factory=MatchNavigationConfig)
     ui_probe_debug: bool = True  # Log sampled UI button colors periodically
@@ -211,13 +211,24 @@ class ScreenCapture:
     def _find_scrcpy_window(self) -> Optional[dict]:
         """
         Find the scrcpy window region.
-        On macOS, we can use the full screen or a specific monitor.
+        On macOS, auto-detect the window position using AppleScript.
         """
-        # For simplicity, use full primary monitor or specified region
+        # Use explicitly configured region if provided
         if self.config.capture_region:
             return self.config.capture_region
         
-        # Default to primary monitor
+        # Try to auto-detect the scrcpy window on macOS
+        try:
+            from src.utils.window_finder import find_window_bounds
+            bounds = find_window_bounds(self.config.scrcpy_window_title)
+            if bounds:
+                print(f"[ScreenCapture] Auto-detected scrcpy window: {bounds}")
+                return bounds
+        except Exception as e:
+            print(f"[ScreenCapture] Window auto-detection failed: {e}")
+        
+        # Fallback to primary monitor
+        print("[ScreenCapture] Using full primary monitor (set capture_region for better performance)")
         return self.sct.monitors[1]  # monitors[0] is "all monitors"
     
     def capture(self) -> np.ndarray:
