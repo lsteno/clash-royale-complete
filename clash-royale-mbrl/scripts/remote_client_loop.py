@@ -161,8 +161,15 @@ async def main_async(args: argparse.Namespace) -> None:
             current_time = time.time()
             can_act = (current_time - last_action_time) >= 1.0
             
-            if args.want_action and in_battle and can_act and resp.HasField("action") and resp.action.card_idx > 0:
-                env.step((resp.action.card_idx, resp.action.grid_x, resp.action.grid_y))
+            if args.want_action and in_battle and can_act and resp.HasField("action"):
+                card_idx, gx, gy = resp.action.card_idx, resp.action.grid_x, resp.action.grid_y
+                if card_idx > 0:
+                    print(
+                        f"[remote_client] Applying action card={card_idx} grid=({gx},{gy}) in_battle={in_battle} elixir={resp.info_num.get('elixir', -1)}"
+                    )
+                    env.step((card_idx, gx, gy))
+                else:
+                    print("[remote_client] Action has card_idx<=0, skipping tap")
                 last_action_time = current_time
 
             # Log minimal diagnostics

@@ -80,10 +80,12 @@ class FrameServiceProcessor:
                 # Hand the observation to the local trainer and wait for its action.
                 act_tuple = self._bridge.publish(grid, reward_value, done_value, perception_result.info)
                 if act_tuple is not None:
+                    print(f"[processor] bridge action={act_tuple}")
                     action_msg = pb2.Action(card_idx=int(act_tuple[0]), grid_x=int(act_tuple[1]), grid_y=int(act_tuple[2]))
             elif self._action_fn is not None:
                 act = self._action_fn(grid, perception_result.state, perception_result.reward, perception_result.info)
                 if act is not None:
+                    print(f"[processor] action_fn returned {act}")
                     action_msg = act
 
         latency_ms = (time.time() - t0) * 1000.0

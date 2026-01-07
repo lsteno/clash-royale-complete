@@ -291,13 +291,20 @@ class ClashRoyaleDreamerEnv(Env):
     def _attempt_deploy(self, card_slot: int, grid_x: int, grid_y: int) -> None:
         card_names = self._latest_cards
         if card_slot <= 0 or card_slot >= len(card_names):
+            print(f"[Env] Skip deploy: invalid slot {card_slot} (cards len={len(card_names)})")
             return
         card_name = card_names[card_slot]
         elixir_cost = card2elixir.get(card_name, 0)
         if elixir_cost is None or elixir_cost < 0:
             elixir_cost = 0
         if self._latest_elixir < elixir_cost:
+            print(
+                f"[Env] Skip deploy: {card_name} cost={elixir_cost} elixir={self._latest_elixir}"
+            )
             return
+        print(
+            f"[Env] Deploying card '{card_name}' slot={card_slot} cost={elixir_cost} elixir={self._latest_elixir} at ({grid_x},{grid_y})"
+        )
         self._base.step((card_slot, grid_x, grid_y))
 
     def _capture(self):
