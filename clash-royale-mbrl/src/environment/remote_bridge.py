@@ -67,6 +67,9 @@ class RemoteClashRoyaleEnv:
         # Block until the first frame arrives from Machine B.
         self._current = self._bridge.next_step()
         self._episode_return = 0.0
+        # Set no-op action to unblock the gRPC handler that's waiting for a response.
+        # During reset, we don't take any action.
+        self._current.set_action(None)
         return self._current.obs
 
     def step(self, action):
