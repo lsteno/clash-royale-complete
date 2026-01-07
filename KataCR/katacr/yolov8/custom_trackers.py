@@ -194,6 +194,17 @@ class CRBOTSORT(BOTSORT, CRBYTETracker):
   
 TRACKER_MAP = {"bytetrack": CRBYTETracker, "botsort": CRBOTSORT}
 
+
+def _ensure_tracker_cfg_compat(cfg: IterableSimpleNamespace) -> None:
+  """Backfill newer Ultralytics tracker args when missing.
+
+  Some Ultralytics versions expect fields like `fuse_score` to exist on
+  `self.args` inside BYTETracker. Older KataCR tracker YAMLs (or older
+  Ultralytics YAML loaders) may omit these, causing AttributeError.
+  """
+  if not hasattr(cfg, "fuse_score"):
+    cfg.fuse_score = False
+
 def on_predict_start(predictor: object, persist: bool = False) -> None:
   """
   Initialize trackers for object tracking during prediction.
@@ -210,6 +221,7 @@ def on_predict_start(predictor: object, persist: bool = False) -> None:
 
   tracker = check_yaml(predictor.args.tracker)
   cfg = IterableSimpleNamespace(**_yaml_loader(tracker))
+  _ensure_tracker_cfg_compat(cfg)
 
   if cfg.tracker_type not in ["bytetrack", "botsort"]:
     raise AssertionError(f"Only 'bytetrack' and 'botsort' are supported for now, but got '{cfg.tracker_type}'")
@@ -266,6 +278,7 @@ def cr_on_predict_start(detector, persist: bool = True) -> None:
 
   tracker = check_yaml(detector.tracker_cfg_path)
   cfg = IterableSimpleNamespace(**_yaml_loader(tracker))
+  _ensure_tracker_cfg_compat(cfg)
 
   if cfg.tracker_type not in ["bytetrack", "botsort"]:
     raise AssertionError(f"Only 'bytetrack' and 'botsort' are supported for now, but got '{cfg.tracker_type}'")
