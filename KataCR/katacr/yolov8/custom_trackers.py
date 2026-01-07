@@ -1,4 +1,9 @@
-from ultralytics.trackers.track import check_yaml, IterableSimpleNamespace, yaml_load, partial, torch, Path
+# yaml_load moved in some Ultralytics versions; import from track with a fallback to utils.
+try:
+  from ultralytics.trackers.track import check_yaml, IterableSimpleNamespace, yaml_load, partial, torch, Path
+except ImportError:  # older/newer versions may not export yaml_load here
+  from ultralytics.trackers.track import check_yaml, IterableSimpleNamespace, partial, torch, Path
+  from ultralytics.utils import yaml_load
 from ultralytics.trackers.byte_tracker import BYTETracker, STrack, matching, TrackState, np, xywh2ltwh
 from ultralytics.trackers.bot_sort import BOTSORT
 
