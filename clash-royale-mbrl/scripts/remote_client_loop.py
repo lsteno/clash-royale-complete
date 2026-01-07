@@ -43,8 +43,22 @@ async def main_async(args: argparse.Namespace) -> None:
     client = FrameServiceClient(cfg)
     await client.connect()
 
+    # Navigate to training camp on startup
+    print("[remote_client] Navigating to training camp...")
+    nav = getattr(env, "navigator", None)
+    if nav is not None:
+        try:
+            nav.start_training_match()
+            print("[remote_client] In training camp, starting capture loop")
+        except Exception as exc:
+            print(f"[remote_client] Navigation failed: {exc}")
+    await asyncio.sleep(2.0)  # Wait for match to load
+
     frame_id = 0
     interval = 1.0 / max(0.1, args.fps)
+    in_battle = False  # Track if we're actually in a battle
+    last_action_time = 0.0  # Throttle actions to ~1 per second max
+    
     try:
         while True:
             loop_start = time.time()
@@ -68,15 +82,28 @@ async def main_async(args: argparse.Namespace) -> None:
                 continue
 
             match_over = bool(resp.done or resp.info_num.get("match_over", 0.0) > 0.5)
+            
+            # Detect if we're in battle by checking if OCR succeeded (game time detected)
+            game_time = resp.info_num.get("game_time", 0.0)
+            if not resp.ocr_failed and game_time > 0:
+                in_battle = True
+            elif match_over:
+                in_battle = False
 
-            # Apply action if provided
-            if args.want_action and resp.HasField("action") and resp.action.card_idx > 0:
+            # Apply action ONLY if we're in battle AND throttle to max 1 action/sec
+            # (Higher FPS is good for perception but we don't want to spam actions)
+            current_time = time.time()
+            can_act = (current_time - last_action_time) >= 1.0
+            
+            if args.want_action and in_battle and can_act and resp.HasField("action") and resp.action.card_idx > 0:
                 env.step((resp.action.card_idx, resp.action.grid_x, resp.action.grid_y))
+                last_action_time = current_time
 
             # Log minimal diagnostics
             print(
                 f"frame={resp.frame_id} latency_ms={resp.latency_ms:.1f} reward={resp.reward:.3f}"
-                + (f" action=({resp.action.card_idx},{resp.action.grid_x},{resp.action.grid_y})" if resp.HasField("action") else "")
+                + (f" in_battle={'YES' if in_battle else 'NO'}")
+                + (f" action=({resp.action.card_idx},{resp.action.grid_x},{resp.action.grid_y})" if (resp.HasField("action") and in_battle) else "")
                 + (" match_over=1" if match_over else "")
             )
 
