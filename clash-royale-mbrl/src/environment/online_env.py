@@ -270,7 +270,6 @@ class ClashRoyaleDreamerEnv(Env):
         decoded = self._action_mapper.decode(int(action))
         if decoded is not None:
             card_slot, gx, gy = decoded
-            print(f"[Env] Agent deploying card {card_slot} at grid ({gx}, {gy})")
             self._attempt_deploy(*decoded)
         obs, result = self._capture()
         reward_value = result.reward if result.reward is not None else 0.0
@@ -298,13 +297,7 @@ class ClashRoyaleDreamerEnv(Env):
         if elixir_cost is None or elixir_cost < 0:
             elixir_cost = 0
         if self._latest_elixir < elixir_cost:
-            print(
-                f"[Env] Skip deploy: {card_name} cost={elixir_cost} elixir={self._latest_elixir}"
-            )
             return
-        print(
-            f"[Env] Deploying card '{card_name}' slot={card_slot} cost={elixir_cost} elixir={self._latest_elixir} at ({grid_x},{grid_y})"
-        )
         self._base.step((card_slot, grid_x, grid_y))
 
     def _capture(self):
