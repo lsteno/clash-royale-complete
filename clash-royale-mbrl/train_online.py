@@ -113,6 +113,8 @@ class TrainConfig:
     use_remote_frames: bool = False
     rpc_host: str = "0.0.0.0"
     rpc_port: int = 50051
+    save_perception_crops: bool = False
+    snapshot_gap: int = 5000  # Save checkpoint every N iterations
 
 
 def parse_args() -> TrainConfig:
@@ -134,6 +136,8 @@ def parse_args() -> TrainConfig:
     parser.add_argument("--use-remote-frames", action="store_true", help="Consume observations from remote FrameService (Machine B emulator)")
     parser.add_argument("--rpc-host", type=str, default=TrainConfig.rpc_host, help="FrameService listen host (Machine A)")
     parser.add_argument("--rpc-port", type=int, default=TrainConfig.rpc_port, help="FrameService listen port (Machine A)")
+    parser.add_argument("--save-perception-crops", action="store_true", help="Save elixir/time/arena crops for debugging")
+    parser.add_argument("--snapshot-gap", type=int, default=TrainConfig.snapshot_gap, help="Save checkpoint every N iterations")
     args = parser.parse_args()
     return TrainConfig(
         logdir=args.logdir,
@@ -153,6 +157,8 @@ def parse_args() -> TrainConfig:
         use_remote_frames=args.use_remote_frames,
         rpc_host=args.rpc_host,
         rpc_port=args.rpc_port,
+        save_perception_crops=args.save_perception_crops,
+        snapshot_gap=args.snapshot_gap,
     )
 
 
@@ -216,8 +222,13 @@ def main() -> None:
             raise RuntimeError("Remote frames requested but bridge missing")
 
         def _run_server():
+            from src.perception.katacr_pipeline import KataCRVisionConfig
             proc_cfg = ProcessorConfig()
-            processor = FrameServiceProcessor(proc_cfg, bridge=bridge)
+            vision_cfg = KataCRVisionConfig(
+                debug_save_parts=cfg.save_perception_crops,
+                debug_parts_dir=cfg.logdir / "perception_crops",
+            )
+            processor = FrameServiceProcessor(proc_cfg, vision_cfg=vision_cfg, bridge=bridge)
             server_cfg = RpcServerConfig(host=cfg.rpc_host, port=cfg.rpc_port)
             print(f"[train_online] gRPC FrameService listening on {cfg.rpc_host}:{cfg.rpc_port}")
             asyncio.run(serve_forever(processor, server_cfg))
@@ -264,7 +275,7 @@ def main() -> None:
         wandb_run=cfg.wandb_run,
     )
     try:
-        logger.set_snapshot_gap(2000)
+        logger.set_snapshot_gap(cfg.snapshot_gap)
     except AttributeError:
         pass
     with logger_context(
@@ -273,7 +284,7 @@ def main() -> None:
         "clash_royale_dreamer",
         config_dict,
         use_summary_writer=True,
-        snapshot_mode="last",
+        snapshot_mode="gap",  # Save every snapshot_gap iterations
         override_prefix=True,
     ):
         runner.train()
