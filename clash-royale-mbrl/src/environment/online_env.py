@@ -12,7 +12,7 @@ from rlpyt.spaces.float_box import FloatBox
 
 from dreamer.envs.env import EnvInfo
 
-# Ensure KataCR package is importable when running from this repo checkout.
+# Ensure KataC package is importable when running from this repo checkout.
 KATACR_ROOT = Path(__file__).resolve().parents[3] / "KataCR"
 if str(KATACR_ROOT) not in sys.path:
     sys.path.insert(0, str(KATACR_ROOT))
