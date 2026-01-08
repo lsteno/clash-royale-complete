@@ -247,8 +247,13 @@ class Dreamer(RlAlgorithm):
         # squeeze batch sizes to single batch dimension for imagination roll-out
         batch_size = batch_t * batch_b
 
-        # normalize image
-        observation = observation.type(self.type) / 255.0 - 0.5
+        # normalize image: center to [-0.5, 0.5]
+        # For Atari (uint8 [0,255]): divide by 255 then subtract 0.5
+        # For state grids already in [0,1]: just subtract 0.5
+        observation = observation.type(self.type)
+        if observation.max() > 1.5:  # Likely [0, 255] range (Atari-style)
+            observation = observation / 255.0
+        observation = observation - 0.5
         # embed the image
         embed = model.observation_encoder(observation)
 

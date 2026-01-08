@@ -173,15 +173,19 @@ class AtariDreamerModel(AgentModel):
         prev_state: RSSMState = None,
     ):
         lead_dim, T, B, img_shape = infer_leading_dims(observation, 3)
-        observation = (
-            observation.reshape(T * B, *img_shape).type(self.dtype) / 255.0 - 0.5
-        )
+        obs_flat = observation.reshape(T * B, *img_shape).type(self.dtype)
+        # normalize image: center to [-0.5, 0.5]
+        # For Atari (uint8 [0,255]): divide by 255 then subtract 0.5
+        # For state grids already in [0,1]: just subtract 0.5
+        if obs_flat.max() > 1.5:  # Likely [0, 255] range (Atari-style)
+            obs_flat = obs_flat / 255.0
+        obs_flat = obs_flat - 0.5
         prev_action = prev_action.reshape(T * B, -1).to(self.dtype)
         if prev_state is None:
             prev_state = self.representation.initial_state(
                 prev_action.size(0), device=prev_action.device, dtype=self.dtype
             )
-        state = self.get_state_representation(observation, prev_action, prev_state)
+        state = self.get_state_representation(obs_flat, prev_action, prev_state)
 
         action, action_dist = self.policy(state)
         return_spec = ModelReturnSpec(action, state)
