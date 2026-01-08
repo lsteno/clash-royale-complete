@@ -41,9 +41,9 @@ class KataCRVisionConfig:
     classifier_path: Optional[Path] = None
     ocr_onnx: bool = False
     ocr_gpu: bool = True
-    resize_width: int = 1280  # KataCR canonical width
-    resize_height: int = 576  # KataCR canonical height
-    debug_save_parts: bool = False
+    resize_width: int = 576   # KataCR canonical portrait width
+    resize_height: int = 1280  # KataCR canonical portrait height
+    debug_save_parts: bool = True
     debug_parts_dir: Path = Path("logs/vision_parts")
 
     def resolved_detectors(self) -> List[Path]:
@@ -125,7 +125,13 @@ class VisualFusionAdapter:
         self._last_capture_ts = now_ts
         arena = self.yolo.infer(parts[1], pil=False)
         cards = self.classifier.process_part3(parts[2], pil=False)
-        elixir = self.ocr.process_part3_elixir(parts[2], pil=False)
+        elixir_raw = self.ocr.process_part3_elixir(parts[2], pil=False)
+        try:
+            elixir = int(elixir_raw)
+            elixir_failed = False
+        except (TypeError, ValueError):
+            elixir = -1  # Mark failure explicitly for downstream consumers
+            elixir_failed = True
         
         # Check for Victory/Defeat/Match Over texts in the center
         center_flag = self.ocr.process_center_texts(frame_bgr, pil=False)
@@ -136,6 +142,8 @@ class VisualFusionAdapter:
             "arena": arena,
             "cards": cards,
             "elixir": elixir,
+            "elixir_raw": elixir_raw,
+            "elixir_failed": elixir_failed,
             "center_flag": center_flag,
             "card2idx": self.classifier.card2idx,
             "idx2card": self.classifier.idx2card,

@@ -74,6 +74,15 @@ class FrameServiceProcessor:
         latency_ms = (time.time() - t0) * 1000.0
         reward_value = float(perception_result.reward if perception_result.reward is not None else 0.0)
         done_value = bool(match_over)
+        
+        def _safe_float(value, default: float) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return float(default)
+
+        time_value = _safe_float(perception_result.state.get("time"), 0.0)
+        elixir_value = _safe_float(perception_result.state.get("elixir"), -1.0)
         action_msg = None
         if request.want_action:
             if self._bridge is not None:
@@ -107,12 +116,14 @@ class FrameServiceProcessor:
         resp.info_str.update({
             "color_model": request.format.color_model or "BGR",
         })
+        if perception_result.info.get("elixir_failed"):
+            resp.info_str["elixir_status"] = "ocr_failed"
         resp.info_num.update({
             "server_ms": latency_ms,
             "timestamp": request.timestamp,
             "match_over": 1.0 if done_value else 0.0,
-            "game_time": float(perception_result.state.get("time", 0.0)),
-            "elixir": float(perception_result.state.get("elixir", -1.0)),
+            "game_time": time_value,
+            "elixir": elixir_value,
         })
         return resp
 
