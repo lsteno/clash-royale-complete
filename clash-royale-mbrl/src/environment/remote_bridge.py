@@ -107,7 +107,12 @@ class RemoteClashRoyaleEnv:
         info = self._current.info if self._current is not None else {}
         cards = info.get("cards") if isinstance(info, dict) else None
         elixir = info.get("elixir") if isinstance(info, dict) else 0
-        set_action_mask(compute_action_mask(cards, elixir))
+        mask = compute_action_mask(cards, elixir)
+        illegal = int((mask < 0).sum()) if hasattr(mask, "sum") else -1
+        print(
+            f"[RemoteEnv] mask set elixir={elixir} cards={cards if isinstance(cards, (list, tuple)) else type(cards)} illegal={illegal}"
+        )
+        set_action_mask(mask)
 
     def _decode_action(self, action) -> Optional[Tuple[int, int, int]]:
         # action can be tuple or discrete index depending on sampler

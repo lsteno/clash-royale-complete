@@ -92,4 +92,11 @@ class ActionDecoder(nn.Module):
             mask_t = mask_t.unsqueeze(0)
         if mask_t.shape != logits.shape:
             mask_t = mask_t.expand_as(logits)
-        return logits + mask_t
+        result = logits + mask_t
+        try:
+            illegal = (mask_t < 0).sum().item()
+            if illegal > 0:
+                print(f"[ActionMask] applied: illegal={illegal} logits_shape={tuple(logits.shape)}")
+        except Exception:
+            pass
+        return result
