@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+import torch.nn.functional as F
 from rlpyt.algos.base import RlAlgorithm
 from rlpyt.replays.sequence.n_step import SamplesFromReplay
 from rlpyt.utils.buffer import buffer_to, buffer_method
@@ -272,7 +273,10 @@ class Dreamer(RlAlgorithm):
         if self.use_pcont:
             pcont_pred = model.pcont(feat)
             pcont_target = self.discount * (1 - done.float())
-            pcont_loss = -torch.mean(pcont_pred.log_prob(pcont_target))
+            # Torch Bernoulli validates support {0,1}; Dreamer uses continuous targets in [0,1].
+            # Use BCE with logits on the underlying Bernoulli logits to avoid support errors.
+            logits = pcont_pred.base_dist.logits
+            pcont_loss = F.binary_cross_entropy_with_logits(logits, pcont_target, reduction="mean")
         prior_dist = get_dist(prior)
         post_dist = get_dist(post)
         div = torch.mean(torch.distributions.kl.kl_divergence(post_dist, prior_dist))

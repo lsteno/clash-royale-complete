@@ -102,9 +102,27 @@ class DreamerAgent(RecurrentAgentMixin, BaseAgent):
         if self.expl_type == "epsilon_greedy":  # For discrete actions
             action_dim = self.env_model_kwargs["action_shape"][0]
             if np.random.uniform(0, 1) < expl_amount:
-                index = torch.randint(
-                    0, action_dim, action.shape[:-1], device=action.device
-                )
+                # Restrict random picks to currently legal actions via action mask.
+                try:
+                    from src.environment.action_mask import get_action_mask
+
+                    mask = get_action_mask()
+                except Exception:
+                    mask = None
+                legal = None
+                if mask is not None:
+                    try:
+                        mask_t = torch.as_tensor(mask, device=action.device, dtype=action.dtype)
+                        if mask_t.numel() == action_dim:
+                            legal = (mask_t >= 0).nonzero(as_tuple=False).flatten()
+                    except Exception:
+                        legal = None
+                if legal is None or legal.numel() == 0:
+                    # Fallback: uniform over all actions
+                    index = torch.randint(0, action_dim, action.shape[:-1], device=action.device)
+                else:
+                    idx = torch.randint(0, legal.numel(), action.shape[:-1], device=action.device)
+                    index = legal[idx]
                 action = torch.zeros_like(action)
                 action[..., index] = 1
             return action

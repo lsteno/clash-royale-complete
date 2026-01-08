@@ -94,6 +94,9 @@ import threading
 class TrainConfig:
     logdir: Path = Path("logs_online")
     total_steps: int = 200_000
+    prefill: int = 1000
+    train_every: int = 50
+    train_steps: int = 5
     seed: int = 0
     device: str = "auto"  # "cpu", "auto", or CUDA index string
     wandb_project: Optional[str] = None
@@ -112,6 +115,9 @@ def parse_args() -> TrainConfig:
     parser = argparse.ArgumentParser(description="Online Dreamer training for Clash Royale")
     parser.add_argument("--logdir", type=Path, default=TrainConfig.logdir)
     parser.add_argument("--total-steps", type=int, default=TrainConfig.total_steps)
+    parser.add_argument("--prefill", type=int, default=TrainConfig.prefill, help="Replay prefill steps before training")
+    parser.add_argument("--train-every", type=int, default=TrainConfig.train_every, help="Optimizer steps frequency (iterations)")
+    parser.add_argument("--train-steps", type=int, default=TrainConfig.train_steps, help="Optimization steps per training call")
     parser.add_argument("--seed", type=int, default=TrainConfig.seed)
     parser.add_argument("--device", type=str, default=TrainConfig.device)
     parser.add_argument("--wandb-project", type=str, default=None)
@@ -128,6 +134,9 @@ def parse_args() -> TrainConfig:
     return TrainConfig(
         logdir=args.logdir,
         total_steps=args.total_steps,
+        prefill=args.prefill,
+        train_every=args.train_every,
+        train_steps=args.train_steps,
         seed=args.seed,
         device=args.device,
         wandb_project=args.wandb_project,
@@ -214,12 +223,15 @@ def main() -> None:
         import time as _time
         _time.sleep(2)  # Give server thread time to initialize
 
+    prefill_steps = max(cfg.prefill, cfg.batch_T * cfg.num_envs)  # ensure replay has at least one sequence per env
     algo = Dreamer(
         horizon=10,
         kl_scale=0.1,
         use_pcont=True,
         replay_size=100_000,  # Reduced from 5M - our obs is larger than Atari
-        prefill=1000,  # Start training sooner for debugging
+        prefill=prefill_steps,  # Start training sooner for debugging
+        train_every=cfg.train_every,
+        train_steps=cfg.train_steps,
     )
     agent = AtariDreamerAgent(
         train_noise=0.4,
