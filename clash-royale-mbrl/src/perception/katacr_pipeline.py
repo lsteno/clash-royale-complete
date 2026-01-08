@@ -43,6 +43,8 @@ class KataCRVisionConfig:
     ocr_gpu: bool = True
     resize_width: int = 1280  # KataCR canonical width
     resize_height: int = 576  # KataCR canonical height
+    debug_save_parts: bool = False
+    debug_parts_dir: Path = Path("logs/vision_parts")
 
     def resolved_detectors(self) -> List[Path]:
         if self.detector_paths is not None:
@@ -111,6 +113,9 @@ class VisualFusionAdapter:
         parts_pos = np.array(parts_pos)
         parts_pos = (parts_pos.reshape(-1, 2) * np.array(frame_bgr.shape[:2][::-1])).astype(np.int32).reshape(-1, 4)
 
+        if self.cfg.debug_save_parts:
+            self._save_debug_parts(frame_bgr, parts)
+
         now_ts = time.time()
         time_val = self.ocr.process_part1(parts[0], pil=False)
         ocr_time_failed = np.isinf(time_val)
@@ -146,6 +151,19 @@ class VisualFusionAdapter:
             return self._last_time
         delta_seconds = min(int(round(delta)), self.MAX_EXTRAPOLATION_GAP)
         return min(self._last_time + delta_seconds, self.MAX_GAME_TIME)
+
+    def _save_debug_parts(self, frame_bgr: np.ndarray, parts: List[np.ndarray]) -> None:
+        try:
+            out_dir = Path(self.cfg.debug_parts_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            ts = int(time.time() * 1000)
+            cv2.imwrite(str(out_dir / f"frame_{ts}.png"), frame_bgr)
+            for idx, p in enumerate(parts, start=1):
+                if p is None or getattr(p, "size", 0) == 0:
+                    continue
+                cv2.imwrite(str(out_dir / f"frame_{ts}_part{idx}.png"), p)
+        except Exception as exc:
+            print(f"[VisionDebug] failed to save parts: {exc}")
 
 
 class KataCRPerceptionEngine:
