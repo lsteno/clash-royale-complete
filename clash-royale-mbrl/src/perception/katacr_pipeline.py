@@ -25,7 +25,8 @@ KATACR_ROOT = Path(__file__).resolve().parents[3] / "KataCR"
 if str(KATACR_ROOT) not in sys.path:
     sys.path.insert(0, str(KATACR_ROOT))
 
-from katacr.build_dataset.utils.split_part import process_part
+from katacr.build_dataset.constant import part3_elixir_params
+from katacr.build_dataset.utils.split_part import extract_bbox, process_part
 from katacr.classification.predict import CardClassifier
 from katacr.ocr_text.paddle_ocr import OCR
 from katacr.policy.perceptron.reward_builder import RewardBuilder
@@ -43,7 +44,7 @@ class KataCRVisionConfig:
     ocr_gpu: bool = True
     resize_width: int = 576   # KataCR canonical portrait width
     resize_height: int = 1280  # KataCR canonical portrait height
-    debug_save_parts: bool = True
+    debug_save_parts: bool = False
     debug_parts_dir: Path = Path("logs/vision_parts")
 
     def resolved_detectors(self) -> List[Path]:
@@ -89,6 +90,7 @@ class VisualFusionAdapter:
         self.classifier = CardClassifier(self.classifier_path)
         self._last_time = 0
         self._last_capture_ts: Optional[float] = None
+        self._last_elixir: Optional[int] = None
 
     def _validate_assets(self):
         missing = [p for p in self.detectors if not p.exists()]
@@ -108,6 +110,9 @@ class VisualFusionAdapter:
         # Parts: 1 = time HUD, 2 = arena, 3 = cards/elixir
         for i in range(3):
             img, box_params = process_part(frame_bgr, i + 1, verbose=True)
+            # Nudge timer crop (part1) 50px left and 35px down to better align the HUD
+            if i == 0 and isinstance(box_params, tuple) and len(box_params) == 4:
+                img, box_params = self._shift_part_crop(frame_bgr, box_params, dx_px=-50, dy_px=35)
             parts.append(img)
             parts_pos.append(box_params)
         parts_pos = np.array(parts_pos)
@@ -126,12 +131,18 @@ class VisualFusionAdapter:
         arena = self.yolo.infer(parts[1], pil=False)
         cards = self.classifier.process_part3(parts[2], pil=False)
         elixir_raw = self.ocr.process_part3_elixir(parts[2], pil=False)
+        elixir_fallback_used = False
         try:
             elixir = int(elixir_raw)
             elixir_failed = False
+            self._last_elixir = elixir
         except (TypeError, ValueError):
-            elixir = -1  # Mark failure explicitly for downstream consumers
             elixir_failed = True
+            if self._last_elixir is not None:
+                elixir = self._last_elixir
+                elixir_fallback_used = True
+            else:
+                elixir = -1  # Still mark failure if we have no history
         
         # Check for Victory/Defeat/Match Over texts in the center
         center_flag = self.ocr.process_center_texts(frame_bgr, pil=False)
@@ -144,11 +155,25 @@ class VisualFusionAdapter:
             "elixir": elixir,
             "elixir_raw": elixir_raw,
             "elixir_failed": elixir_failed,
+            "elixir_fallback_used": elixir_fallback_used,
             "center_flag": center_flag,
             "card2idx": self.classifier.card2idx,
             "idx2card": self.classifier.idx2card,
             "parts_pos": parts_pos,
         }
+
+    def _shift_part_crop(self, frame_bgr: np.ndarray, box_params: tuple, dx_px: int, dy_px: int):
+        x, y, w, h = box_params
+        fh, fw = frame_bgr.shape[:2]
+        x_px, y_px = int(fw * x), int(fh * y)
+        w_px, h_px = int(fw * w), int(fh * h)
+        x_px = int(np.clip(x_px + dx_px, 0, max(0, fw - w_px)))
+        y_px = int(np.clip(y_px + dy_px, 0, max(0, fh - h_px)))
+        x1, y1 = x_px + w_px, y_px + h_px
+        cropped = frame_bgr[y_px:y1, x_px:x1]
+        # Update params back to proportions so downstream math stays consistent
+        new_params = (x_px / fw, y_px / fh, w_px / fw, h_px / fh)
+        return cropped, new_params
 
     def _extrapolate_time(self, now_ts: float) -> int:
         """Estimate match clock when OCR fails using wall-clock deltas."""
@@ -170,6 +195,11 @@ class VisualFusionAdapter:
                 if p is None or getattr(p, "size", 0) == 0:
                     continue
                 cv2.imwrite(str(out_dir / f"frame_{ts}_part{idx}.png"), p)
+            # Save the elixir sub-crop from part3 for OCR debugging
+            if len(parts) >= 3 and parts[2] is not None and getattr(parts[2], "size", 0) > 0:
+                elixir_crop = extract_bbox(parts[2], *part3_elixir_params)
+                if elixir_crop is not None and getattr(elixir_crop, "size", 0) > 0:
+                    cv2.imwrite(str(out_dir / f"frame_{ts}_elixir.png"), elixir_crop)
         except Exception as exc:
             print(f"[VisionDebug] failed to save parts: {exc}")
 

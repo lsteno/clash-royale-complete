@@ -1,1 +1,0 @@
-{"obs_shape": [15, 32, 18], "action_size": 37, "total_steps": 120, "num_envs": 1, "batch_T": 8, "seed": 0, "wandb_project": null, "wandb_run": null, "name": "clash_royale_dreamer", "run_ID": 0}
