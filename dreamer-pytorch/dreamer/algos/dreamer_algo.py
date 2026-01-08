@@ -199,6 +199,7 @@ class Dreamer(RlAlgorithm):
             self.model_optimizer.step()
             self.actor_optimizer.step()
             self.value_optimizer.step()
+            self.update_counter += 1
 
             with torch.no_grad():
                 loss = model_loss + actor_loss + value_loss

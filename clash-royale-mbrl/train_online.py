@@ -12,6 +12,10 @@ REPO_ROOT = CURRENT_DIR.parent
 DREAMER_ROOT = REPO_ROOT / "dreamer-pytorch"
 if str(DREAMER_ROOT) not in sys.path:
     sys.path.insert(0, str(DREAMER_ROOT))
+# rlpyt lives under dreamer-pytorch/rlpyt; add that explicitly so imports work without pip install.
+RLPYT_ROOT = DREAMER_ROOT / "rlpyt"
+if str(RLPYT_ROOT) not in sys.path:
+    sys.path.insert(0, str(RLPYT_ROOT))
 
 # Ensure project src package is importable when running from source checkout.
 SRC_ROOT = CURRENT_DIR / "src"
