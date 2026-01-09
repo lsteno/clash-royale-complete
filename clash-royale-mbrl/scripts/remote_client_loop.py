@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import cv2
 import numpy as np
 
 from cr.rpc.v1.client import FrameServiceClient, RpcClientConfig
@@ -40,6 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ok-screen", type=str, default=None, help="Override OK button screen coords as x,y (1080x2400 ref)")
     parser.add_argument("--ok-color-bgr", type=str, default=None, help="Override OK button BGR color as b,g,r")
     parser.add_argument("--ok-tol", type=int, default=None, help="Override OK button color tolerance")
+    parser.add_argument("--end-screen-dir", type=str, default=None, help="Directory to save end-screen screenshots before clicking OK")
     return parser.parse_args()
 
 
@@ -182,6 +184,15 @@ async def main_async(args: argparse.Namespace) -> None:
             )
 
             if match_over:
+                # Save end-screen screenshot before clicking OK
+                if args.end_screen_dir:
+                    end_screen_path = Path(args.end_screen_dir)
+                    end_screen_path.mkdir(parents=True, exist_ok=True)
+                    timestamp = int(time.time() * 1000)
+                    screenshot_path = end_screen_path / f"end_screen_{timestamp}.png"
+                    cv2.imwrite(str(screenshot_path), frame)
+                    print(f"[remote_client] Saved end-screen screenshot to {screenshot_path}")
+
                 # Let the client-side navigator clear dialogs and start a new Training Camp match.
                 nav = getattr(env, "navigator", None)
                 if nav is not None:
