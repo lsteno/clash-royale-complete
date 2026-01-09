@@ -125,6 +125,10 @@ class FrameServiceProcessor:
             "game_time": time_value,
             "elixir": elixir_value,
         })
+
+        if done_value:
+            # Clear KataCR state/reward history before the next match begins.
+            self._perception.reset()
         return resp
 
     async def heartbeat(self, request: pb2.HeartbeatRequest) -> pb2.HeartbeatResponse:

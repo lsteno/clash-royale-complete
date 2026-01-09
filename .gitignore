@@ -70,3 +70,4 @@ outputs/
 *.swo
 clash-royale-mbrl/logs_online/*
 *.deb
+clash-royale-mbrl/end_screens/*

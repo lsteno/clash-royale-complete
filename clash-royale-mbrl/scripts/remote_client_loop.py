@@ -14,7 +14,6 @@ import argparse
 import asyncio
 import time
 from pathlib import Path
-from typing import Optional
 
 import cv2
 import numpy as np
@@ -111,9 +110,10 @@ async def main_async(args: argparse.Namespace) -> None:
 
     frame_id = 0
     interval = 1.0 / max(0.1, args.fps)
+    action_interval = interval  # Align action cadence with capture rate
     in_battle = False  # Track if we're actually in a battle
-    last_action_time = 0.0  # Throttle actions to ~1 per second max
-    
+    last_action_time = 0.0  # Track last action timestamp
+
     try:
         while True:
             loop_start = time.time()
@@ -142,27 +142,26 @@ async def main_async(args: argparse.Namespace) -> None:
                 continue
 
             match_over = bool(resp.done or resp.info_num.get("match_over", 0.0) > 0.5)
-            
+
             # Detect if we're in battle by checking game_time > 0
             # (OCR may fail but extrapolation still works)
             game_time = resp.info_num.get("game_time", 0.0)
             ocr_failed = resp.ocr_failed
-            
+
             # Debug: print OCR status on first few frames
             if frame_id < 10:
                 print(f"  [debug] ocr_failed={ocr_failed} game_time={game_time} info_num keys={list(resp.info_num.keys())}")
-            
+
             # Battle is active if game_time > 0, even if OCR failed (extrapolation works)
             if game_time > 0:
                 in_battle = True
             elif match_over:
                 in_battle = False
 
-            # Apply action ONLY if we're in battle AND throttle to max 1 action/sec
-            # (Higher FPS is good for perception but we don't want to spam actions)
+            # Apply action ONLY if we're in battle and aligned to capture cadence
             current_time = time.time()
-            can_act = (current_time - last_action_time) >= 1.0
-            
+            can_act = (current_time - last_action_time) >= action_interval
+
             if args.want_action and in_battle and can_act and resp.HasField("action"):
                 card_idx, gx, gy = resp.action.card_idx, resp.action.grid_x, resp.action.grid_y
                 elixir_val = resp.info_num.get("elixir", -1)

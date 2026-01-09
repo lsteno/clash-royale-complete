@@ -174,7 +174,7 @@ class RewardBuilder:
           if self.frame_count - frame[i,j] >= DESTROY_FRAME_DELTA_THRE:
             now_hp_tower[i,j] = 0
         else:
-          frame[i] = self.frame_count
+          frame[i,j] = self.frame_count
         # if self._has_emote(XYXY_TOWER[i][j]):  # DEBUG
         #   print("Has emote in tower-patch", i, j)
     # print("Last tower destroy time:", self.last_tower_destroy_time)
