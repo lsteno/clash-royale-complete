@@ -44,6 +44,7 @@ class FrameServiceProcessor:
         self._encoder = StateTensorEncoder(cfg.max_game_seconds)
         self._action_fn = action_fn
         self._bridge = bridge
+        self._frame_count = 0
 
     async def process_frame(self, request: pb2.ProcessFrameRequest) -> pb2.ProcessFrameResponse:
         t0 = time.time()
@@ -54,6 +55,18 @@ class FrameServiceProcessor:
 
         # Detect end-of-match via UI color probe on the received frame.
         match_over = _detect_match_over(frame_bgr)
+
+        # Log tower HP every 5 frames
+        self._frame_count += 1
+        if self._frame_count % 5 == 0:
+            rb = self._perception.reward_builder
+            hp_tower = rb.hp_tower  # shape (2, 2): [ally/enemy][left/right]
+            hp_king = rb.hp_king_tower  # shape (2,): [ally, enemy]
+            print(
+                f"[TowerHP] frame={self._frame_count} "
+                f"ally_left={hp_tower[0,0]} ally_right={hp_tower[0,1]} ally_king={hp_king[0]} | "
+                f"enemy_left={hp_tower[1,0]} enemy_right={hp_tower[1,1]} enemy_king={hp_king[1]}"
+            )
 
         # Encode grid to float32 CxHxW row-major
         grid = self._encoder.encode(

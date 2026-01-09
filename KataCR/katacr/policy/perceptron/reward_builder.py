@@ -16,6 +16,7 @@ XYXY_TOWER = [[(50, 625, 175, 770), (400, 625, 525, 770)], [(50, 135, 175, 285),
 OCR_NUM_CONF_THRE = 0.70
 DESTROY_FRAME_DELTA_THRE = 10
 MAX_DELTA_HP = 1600
+MAX_DELTA_HP_IGNORE_STREAK = 5  # Stop ignoring after this many consecutive MAX_DELTA_HP violations
 ELIXIR_OVER_FRAME = 10  # 0.1 * 5 = 1 sec
 
 # Enemy unit elimination tracking
@@ -58,6 +59,9 @@ class RewardBuilder:
     self.last_king_tower_destroy_frame = np.full((2,), -1, np.int32)
     self.frame_count = 0
     self.time = 0
+    # Track consecutive MAX_DELTA_HP ignores per tower
+    self._king_tower_delta_ignore_streak = np.zeros((2,), np.int32)
+    self._tower_delta_ignore_streak = np.zeros((2, 2), np.int32)
     # Enemy unit tracking: track_id -> {cls, last_seen_frame, elixir_value}
     self._enemy_units_tracked = {}
     # Track pending eliminations: track_id -> frames_missing
@@ -127,8 +131,15 @@ class RewardBuilder:
             print(f"Warning(reward): (time={self.time}) king-tower id={b[-4]}, ocr_hp={hp} > old hp={self.hp_king_tower[bel]}, there maybe wrong detection before")
           delta = self.hp_king_tower[bel] - hp
           if abs(delta) > MAX_DELTA_HP:
-            print(f"Warning(reward): (time={self.time}) king-tower id={b[-4]}, old_hp-ocr_hp={delta}'s abs {MAX_DELTA_HP=}, ignore it")
-            hp = -1
+            self._king_tower_delta_ignore_streak[bel] += 1
+            if self._king_tower_delta_ignore_streak[bel] >= MAX_DELTA_HP_IGNORE_STREAK:
+              print(f"Warning(reward): (time={self.time}) king-tower id={b[-4]}, old_hp-ocr_hp={delta}'s abs > {MAX_DELTA_HP=}, but streak={self._king_tower_delta_ignore_streak[bel]} >= {MAX_DELTA_HP_IGNORE_STREAK}, accepting it")
+              self._king_tower_delta_ignore_streak[bel] = 0  # Reset streak
+            else:
+              print(f"Warning(reward): (time={self.time}) king-tower id={b[-4]}, old_hp-ocr_hp={delta}'s abs > {MAX_DELTA_HP=}, ignore it (streak={self._king_tower_delta_ignore_streak[bel]})")
+              hp = -1
+          else:
+            self._king_tower_delta_ignore_streak[bel] = 0  # Reset streak on valid delta
         now_hp_king_tower[bel] = hp
     # check king-tower is destroied
     king_tower_box = get_unit_box('king-tower')
@@ -155,8 +166,15 @@ class RewardBuilder:
           print(f"Warning(reward): (time={self.time}) tower id={b[-4]}, ocr_hp={hp} > old hp={self.hp_tower[i,j]}, there maybe wrong detection before")
         delta = self.hp_tower[i,j] - hp
         if abs(delta) > MAX_DELTA_HP:
-          print(f"Warning(reward): (time={self.time}) tower id={b[-4]}, old_hp-ocr_hp={delta}'s abs > {MAX_DELTA_HP=}, ignore it")
-          hp = -1
+          self._tower_delta_ignore_streak[i,j] += 1
+          if self._tower_delta_ignore_streak[i,j] >= MAX_DELTA_HP_IGNORE_STREAK:
+            print(f"Warning(reward): (time={self.time}) tower id={b[-4]}, old_hp-ocr_hp={delta}'s abs > {MAX_DELTA_HP=}, but streak={self._tower_delta_ignore_streak[i,j]} >= {MAX_DELTA_HP_IGNORE_STREAK}, accepting it")
+            self._tower_delta_ignore_streak[i,j] = 0  # Reset streak
+          else:
+            print(f"Warning(reward): (time={self.time}) tower id={b[-4]}, old_hp-ocr_hp={delta}'s abs > {MAX_DELTA_HP=}, ignore it (streak={self._tower_delta_ignore_streak[i,j]})")
+            hp = -1
+        else:
+          self._tower_delta_ignore_streak[i,j] = 0  # Reset streak on valid delta
       now_hp_tower[i,j] = hp
     # check tower is destroied
     tower_box = np.concatenate([get_unit_box(name) for name in except_king_tower_unit_list], 0)
