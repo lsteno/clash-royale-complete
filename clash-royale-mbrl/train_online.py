@@ -78,6 +78,23 @@ from dreamer.envs.wrapper import make_wapper
 
 from src.environment.emulator_env import EmulatorConfig
 from src.environment.online_env import ClashRoyaleDreamerEnv, OnlineEnvConfig
+
+
+def get_next_run_id(logdir: Path) -> int:
+    """Find the next available run_X directory number."""
+    if not logdir.exists():
+        return 0
+    existing = [d.name for d in logdir.iterdir() if d.is_dir() and d.name.startswith("run_")]
+    if not existing:
+        return 0
+    max_id = -1
+    for name in existing:
+        try:
+            run_num = int(name.split("_")[1])
+            max_id = max(max_id, run_num)
+        except (IndexError, ValueError):
+            continue
+    return max_id + 1
 from src.environment.remote_bridge import RemoteBridge, RemoteClashRoyaleEnv
 
 # Some downstream deps mutate sys.path; force our in-repo packages to the front.
@@ -278,13 +295,15 @@ def main() -> None:
         logger.set_snapshot_gap(cfg.snapshot_gap)
     except AttributeError:
         pass
+    run_id = get_next_run_id(cfg.logdir)
+    print(f"[train_online] Starting run_{run_id} in {cfg.logdir}")
     with logger_context(
         str(cfg.logdir),
-        cfg.seed,
+        run_id,
         "clash_royale_dreamer",
         config_dict,
         use_summary_writer=True,
-        snapshot_mode="gap",  # Save every snapshot_gap iterations
+        snapshot_mode="last+gap",  # Save every snapshot_gap iterations + final params.pkl
         override_prefix=True,
     ):
         runner.train()

@@ -110,9 +110,10 @@ class VisualFusionAdapter:
         # Parts: 1 = time HUD, 2 = arena, 3 = cards/elixir
         for i in range(3):
             img, box_params = process_part(frame_bgr, i + 1, verbose=True)
-            # Nudge timer crop (part1) 50px left and 35px down to better align the HUD
+            # Nudge timer crop (part1) 35px left and 60px down to better align the HUD
+            # (adjusted +15 right and +25 down for capture-region 1,38,494,1074)
             if i == 0 and isinstance(box_params, tuple) and len(box_params) == 4:
-                img, box_params = self._shift_part_crop(frame_bgr, box_params, dx_px=-50, dy_px=35)
+                img, box_params = self._shift_part_crop(frame_bgr, box_params, dx_px=-35, dy_px=60)
             parts.append(img)
             parts_pos.append(box_params)
         parts_pos = np.array(parts_pos)

@@ -1,10 +1,11 @@
 import numpy as np
 from katacr.ocr_text.paddle_ocr import OCR
 from katacr.yolov8.custom_result import CRResults
-from katacr.constants.label_list import unit2idx
+from katacr.constants.label_list import unit2idx, idx2unit
 from katacr.policy.perceptron.utils import extract_img, xyxy2center, xyxy2sub, pil_draw_text
 from katacr.build_dataset.generation_config import except_king_tower_unit_list
 import cv2
+from collections import defaultdict
 
 TARGET_SIZE_KING_TOWER_BAR = (140, 40)
 TARGET_SIZE_TOWER_BAR = (96, 30)
@@ -16,6 +17,32 @@ OCR_NUM_CONF_THRE = 0.70
 DESTROY_FRAME_DELTA_THRE = 10
 MAX_DELTA_HP = 1600
 ELIXIR_OVER_FRAME = 10  # 0.1 * 5 = 1 sec
+
+# Enemy unit elimination tracking
+UNIT_MISSING_FRAMES_THRESHOLD = 5  # Frames before considering unit eliminated
+UNIT_ELIMINATION_REWARD_SCALE = 0.05  # Scale factor for elimination reward (per elixir)
+
+# WHITELIST: Only these enemy units give elimination rewards
+# These are the known Training Camp opponent cards with their elixir costs
+VALID_ENEMY_ELIMINATION_UNITS = {
+    'knight': 3,        # Knight - 3 elixir
+    'archer': 3,        # Archers - 3 elixir (detected as singular)
+    'goblin': 2,        # Goblins - 2 elixir
+    'spear-goblin': 2,  # Spear Goblins - 2 elixir
+    'giant': 5,         # Giant - 5 elixir
+    'goblin-hut': 5,    # Goblin Hut - 5 elixir
+}
+
+# BLACKLIST: Never reward these - they are Dreamer's own cards
+# If detected as enemy elimination, it's a false detection
+DREAMER_OWN_CARDS = {
+    'hog-rider',    # 4 elixir
+    'ice-spirit',   # 1 elixir
+    'skeleton',     # 1 elixir (Skeletons)
+    'cannon',       # 3 elixir
+    'musketeer',    # 4 elixir
+    'ice-golem',    # 2 elixir
+}
 
 class RewardBuilder:
   def __init__(self, ocr: OCR = None):
@@ -31,6 +58,10 @@ class RewardBuilder:
     self.last_king_tower_destroy_frame = np.full((2,), -1, np.int32)
     self.frame_count = 0
     self.time = 0
+    # Enemy unit tracking: track_id -> {cls, last_seen_frame, elixir_value}
+    self._enemy_units_tracked = {}
+    # Track pending eliminations: track_id -> frames_missing
+    self._enemy_units_missing = defaultdict(int)
   
   def _ocr_hp(self, xyxy, target_size):
     img = extract_img(self.img, xyxy, target_size=target_size)
@@ -192,10 +223,104 @@ class RewardBuilder:
         self.last_elixir_over_frame = self.frame_count
     else:
       self.last_elixir_over_frame = None
+    
+    # Enemy Unit Elimination Reward
+    elimination_reward = self._compute_enemy_elimination_reward(verbose=verbose)
+    reward['enemy_eliminated'] = elimination_reward
+    
     total_reward = sum(reward.values())
     if verbose:
       print(f"Time={self.time}, Frame={self.frame_count}, {reward=}, {total_reward=:.4f}")
     return total_reward
+  
+  def _compute_enemy_elimination_reward(self, verbose=False):
+    """
+    Compute reward for eliminating enemy units based on their elixir cost.
+    
+    Tracks enemy units (bel=0) across frames. When a tracked unit disappears
+    for UNIT_MISSING_FRAMES_THRESHOLD consecutive frames, it's considered
+    eliminated and a reward proportional to its elixir cost is given.
+    
+    Only rewards elimination of units in VALID_ENEMY_ELIMINATION_UNITS whitelist.
+    Ignores Dreamer's own cards and any other detections to avoid false positives.
+    
+    Returns:
+      float: Positive reward for elixir value of eliminated enemy units.
+    """
+    elimination_reward = 0.0
+    current_enemy_track_ids = set()
+    
+    # Identify current enemy units (bel=0) with valid track IDs
+    for b in self.box:
+      track_id = int(b[4])
+      cls_idx = int(b[-2])
+      bel = int(b[-1])
+      
+      # Only track enemy units (bel=0) with valid track IDs
+      if bel != 0 or track_id < 0:
+        continue
+      
+      # Get unit name and check if it's a valid enemy unit to track
+      unit_name = idx2unit.get(cls_idx, '')
+      
+      # Skip if it's Dreamer's own card (false detection)
+      if unit_name in DREAMER_OWN_CARDS:
+        continue
+      
+      # Only track units in the valid enemy whitelist
+      if unit_name not in VALID_ENEMY_ELIMINATION_UNITS:
+        continue
+      
+      current_enemy_track_ids.add(track_id)
+      
+      # Update or add to tracked units - use whitelist elixir value for consistency
+      elixir_value = VALID_ENEMY_ELIMINATION_UNITS[unit_name]
+      if track_id not in self._enemy_units_tracked:
+        self._enemy_units_tracked[track_id] = {
+          'cls': cls_idx,
+          'unit_name': unit_name,
+          'elixir_value': elixir_value,
+          'first_seen_frame': self.frame_count,
+        }
+        if verbose:
+          print(f"[EnemyTrack] New enemy unit: {unit_name} (id={track_id}, elixir={elixir_value})")
+      
+      # Unit is visible, reset missing counter
+      if track_id in self._enemy_units_missing:
+        del self._enemy_units_missing[track_id]
+    
+    # Check for units that went missing
+    tracked_ids = list(self._enemy_units_tracked.keys())
+    eliminated_ids = []
+    
+    for track_id in tracked_ids:
+      if track_id not in current_enemy_track_ids:
+        # Unit not seen this frame
+        self._enemy_units_missing[track_id] += 1
+        
+        if self._enemy_units_missing[track_id] >= UNIT_MISSING_FRAMES_THRESHOLD:
+          # Unit has been missing long enough, consider it eliminated
+          unit_info = self._enemy_units_tracked[track_id]
+          elixir_value = unit_info['elixir_value']
+          
+          if elixir_value > 0:
+            # Give reward proportional to elixir cost
+            unit_reward = elixir_value * UNIT_ELIMINATION_REWARD_SCALE
+            elimination_reward += unit_reward
+            
+            # Always log elimination rewards for debugging training runs
+            print(f"[EnemyElim] Eliminated {unit_info['unit_name']} (id={track_id}) "
+                  f"worth {elixir_value} elixir -> reward +{unit_reward:.3f}")
+          
+          eliminated_ids.append(track_id)
+    
+    # Clean up eliminated units from tracking
+    for track_id in eliminated_ids:
+      del self._enemy_units_tracked[track_id]
+      if track_id in self._enemy_units_missing:
+        del self._enemy_units_missing[track_id]
+    
+    return elimination_reward
   
   def update(self, info):
     self.time: int = info['time'] if not np.isinf(info['time']) else self.time

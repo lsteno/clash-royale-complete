@@ -92,12 +92,14 @@ class SimplifiedStateBuilder:
     
     # Screen regions for 1080x2400 resolution
     REGIONS = {
-        'elixir_text': (200, 2300, 400, 2400),  # x1, y1, x2, y2
-        'elixir_bar': (200, 2300, 1050, 2400),  # Updated coordinates
+        # Shifted elixir crops 20px down for better alignment (capture-region 1,38,494,1074)
+        'elixir_text': (200, 2320, 400, 2420),  # x1, y1, x2, y2
+        'elixir_bar': (200, 2320, 1050, 2420),  # Updated coordinates
         'cards': [(300, 2050, 400, 2250), (500, 2050, 600, 2250),
                   (700, 2050, 800, 2250), (900, 2050, 1000, 2250)],
         'arena': (22, 580, 1058, 1850),
-        'time': (450, 50, 630, 120),
+        # Shifted time crop 40px down and 15px right (capture-region 1,38,494,1074)
+        'time': (465, 90, 645, 160),
         'our_tower_hp': [(100, 1650, 250, 1750), (830, 1650, 980, 1750), (450, 1750, 630, 1850)],
         'enemy_tower_hp': [(100, 650, 250, 750), (830, 650, 980, 750), (450, 550, 630, 650)],
     }

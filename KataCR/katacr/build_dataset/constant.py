@@ -89,4 +89,5 @@ part3_bbox_params = [  # Configure for card positions in part3, card position is
 ]
 # Elixir number crop within part3 (proportional x, y, w, h).
 # Move up another ~20px (0.10 on 200px height) and right ~10px (0.0167 on 600px width).
-part3_elixir_params = (0.279, 0.500, 0.067, 0.160)
+# Shifted 10px down (0.05 on 200px height) for capture-region 1,38,494,1074.
+part3_elixir_params = (0.279, 0.550, 0.067, 0.160)
