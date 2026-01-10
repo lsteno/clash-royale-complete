@@ -133,6 +133,9 @@ class TrainConfig:
     save_perception_crops: bool = False
     snapshot_gap: int = 5000  # Save checkpoint every N iterations
     expl_decay: int = 18000  # Exploration decay rate (iterations to reach expl_min)
+    encoder_type: str = "mlp"
+    encoder_embed_size: int = 1024
+    encoder_hidden: int = 512
 
 
 def parse_args() -> TrainConfig:
@@ -157,6 +160,12 @@ def parse_args() -> TrainConfig:
     parser.add_argument("--save-perception-crops", action="store_true", help="Save elixir/time/arena crops for debugging")
     parser.add_argument("--snapshot-gap", type=int, default=TrainConfig.snapshot_gap, help="Save checkpoint every N iterations")
     parser.add_argument("--expl-decay", type=int, default=TrainConfig.expl_decay, help="Exploration decay rate in iterations (ε decays from 0.4 to 0.1 over this many iters)")
+    parser.add_argument("--encoder-type", type=str, default=TrainConfig.encoder_type, choices=["cnn", "mlp"],
+                        help="Observation encoder type (cnn for conv, mlp for dense)")
+    parser.add_argument("--encoder-embed-size", type=int, default=TrainConfig.encoder_embed_size,
+                        help="Embedding size for MLP observation encoder")
+    parser.add_argument("--encoder-hidden", type=int, default=TrainConfig.encoder_hidden,
+                        help="Hidden size for MLP observation encoder/decoder")
     args = parser.parse_args()
     return TrainConfig(
         logdir=args.logdir,
@@ -179,6 +188,9 @@ def parse_args() -> TrainConfig:
         save_perception_crops=args.save_perception_crops,
         snapshot_gap=args.snapshot_gap,
         expl_decay=args.expl_decay,
+        encoder_type=args.encoder_type,
+        encoder_embed_size=args.encoder_embed_size,
+        encoder_hidden=args.encoder_hidden,
     )
 
 
@@ -276,7 +288,12 @@ def main() -> None:
         expl_type="epsilon_greedy",
         expl_min=0.1,
         expl_decay=cfg.expl_decay,
-        model_kwargs=dict(use_pcont=True),
+        model_kwargs=dict(
+            use_pcont=True,
+            encoder_type=cfg.encoder_type,
+            encoder_embed_size=cfg.encoder_embed_size,
+            encoder_hidden=cfg.encoder_hidden,
+        ),
     )
     runner = MinibatchRl(
         algo=algo,

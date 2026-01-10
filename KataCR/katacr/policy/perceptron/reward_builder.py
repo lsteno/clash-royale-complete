@@ -22,6 +22,7 @@ ELIXIR_OVER_FRAME = 10  # 0.1 * 5 = 1 sec
 # Enemy unit elimination tracking
 UNIT_MISSING_FRAMES_THRESHOLD = 5  # Frames before considering unit eliminated
 UNIT_ELIMINATION_REWARD_SCALE = 0.05  # Scale factor for elimination reward (per elixir)
+ELIMINATION_EDGE_MARGIN = 8  # Ignore eliminations when last seen near arena edges
 
 # WHITELIST: Only these enemy units give elimination rewards
 # These are the known Training Camp opponent cards with their elixir costs
@@ -293,15 +294,19 @@ class RewardBuilder:
       
       # Update or add to tracked units - use whitelist elixir value for consistency
       elixir_value = VALID_ENEMY_ELIMINATION_UNITS[unit_name]
+      center = xyxy2center(b[:4])
       if track_id not in self._enemy_units_tracked:
         self._enemy_units_tracked[track_id] = {
           'cls': cls_idx,
           'unit_name': unit_name,
           'elixir_value': elixir_value,
           'first_seen_frame': self.frame_count,
+          'last_center': center,
         }
         if verbose:
           print(f"[EnemyTrack] New enemy unit: {unit_name} (id={track_id}, elixir={elixir_value})")
+      else:
+        self._enemy_units_tracked[track_id]['last_center'] = center
       
       # Unit is visible, reset missing counter
       if track_id in self._enemy_units_missing:
@@ -322,6 +327,11 @@ class RewardBuilder:
           elixir_value = unit_info['elixir_value']
           
           if elixir_value > 0:
+            if not self._center_in_arena(unit_info.get('last_center')):
+              if verbose:
+                print(f"[EnemyElim] Skip reward for {unit_info.get('unit_name')} (id={track_id}) near edge")
+              eliminated_ids.append(track_id)
+              continue
             # Give reward proportional to elixir cost
             unit_reward = elixir_value * UNIT_ELIMINATION_REWARD_SCALE
             elimination_reward += unit_reward
@@ -339,6 +349,17 @@ class RewardBuilder:
         del self._enemy_units_missing[track_id]
     
     return elimination_reward
+
+  def _center_in_arena(self, center):
+    if center is None:
+      return False
+    try:
+      cx, cy = center
+      h, w = self.img.shape[:2]
+    except Exception:
+      return False
+    margin = ELIMINATION_EDGE_MARGIN
+    return margin <= cx <= (w - margin) and margin <= cy <= (h - margin)
   
   def update(self, info):
     self.time: int = info['time'] if not np.isinf(info['time']) else self.time

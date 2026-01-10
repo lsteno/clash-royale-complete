@@ -110,9 +110,7 @@ async def main_async(args: argparse.Namespace) -> None:
 
     frame_id = 0
     interval = 1.0 / max(0.1, args.fps)
-    action_interval = interval  # Align action cadence with capture rate
     in_battle = False  # Track if we're actually in a battle
-    last_action_time = 0.0  # Track last action timestamp
 
     try:
         while True:
@@ -158,11 +156,8 @@ async def main_async(args: argparse.Namespace) -> None:
             elif match_over:
                 in_battle = False
 
-            # Apply action ONLY if we're in battle and aligned to capture cadence
-            current_time = time.time()
-            can_act = (current_time - last_action_time) >= action_interval
-
-            if args.want_action and in_battle and can_act and resp.HasField("action"):
+            # Apply every server action to keep the trainer and emulator in sync.
+            if args.want_action and resp.HasField("action"):
                 card_idx, gx, gy = resp.action.card_idx, resp.action.grid_x, resp.action.grid_y
                 elixir_val = resp.info_num.get("elixir", -1)
                 if card_idx > 0:
@@ -172,7 +167,6 @@ async def main_async(args: argparse.Namespace) -> None:
                     env.step((card_idx, gx, gy))
                 else:
                     print(f"[remote_client] Action has card_idx<=0, skipping tap (elixir={elixir_val})")
-                last_action_time = current_time
 
             # Log minimal diagnostics
             print(

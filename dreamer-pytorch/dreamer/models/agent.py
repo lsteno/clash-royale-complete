@@ -12,7 +12,12 @@ from rlpyt.utils.tensor import (
 
 from dreamer.models.action import ActionDecoder
 from dreamer.models.dense import DenseModel
-from dreamer.models.observation import ObservationDecoder, ObservationEncoder
+from dreamer.models.observation import (
+    DenseObservationDecoder,
+    DenseObservationEncoder,
+    ObservationDecoder,
+    ObservationEncoder,
+)
 from dreamer.models.rnns import (
     RSSMState,
     RSSMRepresentation,
@@ -30,6 +35,9 @@ class AgentModel(nn.Module):
         deterministic_size=200,
         hidden_size=200,
         image_shape=(3, 64, 64),
+        encoder_type="cnn",
+        encoder_embed_size=1024,
+        encoder_hidden=512,
         action_hidden_size=200,
         action_layers=3,
         action_dist="one_hot",
@@ -46,12 +54,29 @@ class AgentModel(nn.Module):
         **kwargs,
     ):
         super().__init__()
-        self.observation_encoder = ObservationEncoder(shape=image_shape)
-        encoder_embed_size = self.observation_encoder.embed_size
-        decoder_embed_size = stochastic_size + deterministic_size
-        self.observation_decoder = ObservationDecoder(
-            embed_size=decoder_embed_size, shape=image_shape
-        )
+        self.encoder_type = encoder_type
+        if encoder_type == "mlp":
+            self.observation_encoder = DenseObservationEncoder(
+                shape=image_shape,
+                embed_size=encoder_embed_size,
+                hidden_size=encoder_hidden,
+                activation=nn.ELU,
+            )
+            encoder_embed_size = self.observation_encoder.embed_size
+            decoder_embed_size = stochastic_size + deterministic_size
+            self.observation_decoder = DenseObservationDecoder(
+                embed_size=decoder_embed_size,
+                shape=image_shape,
+                hidden_size=encoder_hidden,
+                activation=nn.ELU,
+            )
+        else:
+            self.observation_encoder = ObservationEncoder(shape=image_shape)
+            encoder_embed_size = self.observation_encoder.embed_size
+            decoder_embed_size = stochastic_size + deterministic_size
+            self.observation_decoder = ObservationDecoder(
+                embed_size=decoder_embed_size, shape=image_shape
+            )
         self.action_shape = action_shape
         # np.prod returns float for empty shape tuples (e.g., Discrete). Cast to int for nn.Linear sizes.
         output_size = int(np.prod(action_shape))

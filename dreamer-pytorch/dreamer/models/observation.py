@@ -97,6 +97,65 @@ class ObservationDecoder(nn.Module):
         return obs_dist
 
 
+class DenseObservationEncoder(nn.Module):
+    def __init__(
+        self,
+        shape=(3, 64, 64),
+        embed_size=1024,
+        hidden_size=512,
+        activation=nn.ReLU,
+    ):
+        super().__init__()
+        self.shape = shape
+        self._embed_size = embed_size
+        input_size = int(np.prod(shape))
+        self.model = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(input_size, hidden_size),
+            activation(),
+            nn.Linear(hidden_size, embed_size),
+            activation(),
+        )
+
+    def forward(self, obs):
+        batch_shape = obs.shape[:-3]
+        flat = obs.reshape(-1, int(np.prod(self.shape)))
+        embed = self.model(flat)
+        return torch.reshape(embed, (*batch_shape, -1))
+
+    @property
+    def embed_size(self):
+        return self._embed_size
+
+
+class DenseObservationDecoder(nn.Module):
+    def __init__(
+        self,
+        embed_size=1024,
+        shape=(3, 64, 64),
+        hidden_size=512,
+        activation=nn.ReLU,
+    ):
+        super().__init__()
+        self.shape = shape
+        output_size = int(np.prod(shape))
+        self.model = nn.Sequential(
+            nn.Linear(embed_size, hidden_size),
+            activation(),
+            nn.Linear(hidden_size, output_size),
+        )
+
+    def forward(self, x):
+        batch_shape = x.shape[:-1]
+        embed_size = x.shape[-1]
+        squeezed_size = np.prod(batch_shape).item()
+        x = x.reshape(squeezed_size, embed_size)
+        mean = self.model(x)
+        mean = torch.reshape(mean, (*batch_shape, *self.shape))
+        obs_dist = td.Independent(td.Normal(mean, 1), len(self.shape))
+        return obs_dist
+
+
 def _ensure_pair(value):
     if isinstance(value, (tuple, list)):
         if len(value) != 2:

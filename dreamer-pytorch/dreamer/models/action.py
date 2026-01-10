@@ -74,6 +74,9 @@ class ActionDecoder(nn.Module):
         mask is None or shapes are incompatible, logits are returned unchanged.
         """
 
+        # Only apply masks for single-step inference; ignore during batched training.
+        if logits.dim() > 2 or logits.shape[0] > 1:
+            return logits
         try:
             from src.environment.action_mask import get_action_mask
 
