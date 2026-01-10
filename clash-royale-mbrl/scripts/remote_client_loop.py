@@ -41,6 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ok-color-bgr", type=str, default=None, help="Override OK button BGR color as b,g,r")
     parser.add_argument("--ok-tol", type=int, default=None, help="Override OK button color tolerance")
     parser.add_argument("--end-screen-dir", type=str, default=None, help="Directory to save end-screen screenshots before clicking OK")
+    parser.add_argument("--trace-ms", action="store_true", help="Log end-to-end latency breakdown per frame")
     return parser.parse_args()
 
 
@@ -139,6 +140,11 @@ async def main_async(args: argparse.Namespace) -> None:
                 frame_id += 1
                 continue
 
+            recv_ts = time.time()
+            rtt_ms = (recv_ts - ts) * 1000.0
+            server_ms = float(getattr(resp, "latency_ms", 0.0) or 0.0)
+            client_ms = max(0.0, rtt_ms - server_ms)
+
             match_over = bool(resp.done or resp.info_num.get("match_over", 0.0) > 0.5)
 
             # Detect if we're in battle by checking game_time > 0
@@ -157,6 +163,7 @@ async def main_async(args: argparse.Namespace) -> None:
                 in_battle = False
 
             # Apply every server action to keep the trainer and emulator in sync.
+            action_apply_ms = None
             if args.want_action and resp.HasField("action"):
                 card_idx, gx, gy = resp.action.card_idx, resp.action.grid_x, resp.action.grid_y
                 elixir_val = resp.info_num.get("elixir", -1)
@@ -164,16 +171,24 @@ async def main_async(args: argparse.Namespace) -> None:
                     print(
                         f"[remote_client] Applying action card={card_idx} grid=({gx},{gy}) in_battle={in_battle} elixir={elixir_val}"
                     )
+                    apply_start = time.time()
                     env.step((card_idx, gx, gy))
+                    action_apply_ms = (time.time() - apply_start) * 1000.0
                 else:
                     print(f"[remote_client] Action has card_idx<=0, skipping tap (elixir={elixir_val})")
 
             # Log minimal diagnostics
+            trace = ""
+            if args.trace_ms:
+                trace = f" rtt_ms={rtt_ms:.1f} server_ms={server_ms:.1f} client_ms={client_ms:.1f}"
+                if action_apply_ms is not None:
+                    trace += f" apply_ms={action_apply_ms:.1f}"
             print(
                 f"frame={resp.frame_id} latency_ms={resp.latency_ms:.1f} reward={resp.reward:.3f}"
                 + (f" in_battle={'YES' if in_battle else 'NO'}")
                 + (f" action=({resp.action.card_idx},{resp.action.grid_x},{resp.action.grid_y})" if (resp.HasField("action") and in_battle) else "")
                 + (" match_over=1" if match_over else "")
+                + trace
             )
 
             if match_over:
