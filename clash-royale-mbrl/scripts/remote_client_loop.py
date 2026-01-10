@@ -29,10 +29,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--deadline-ms", type=int, default=500, help="Per-RPC deadline in ms")
     parser.add_argument("--max-inflight", type=int, default=2, help="Max in-flight RPCs")
     parser.add_argument("--want-action", action="store_true", help="Request action from server")
-    parser.add_argument("--fps", type=float, default=5.0, help="Capture/send rate")
+    parser.add_argument("--fps", type=float, default=2.0, help="Capture/send rate")
     parser.add_argument("--scrcpy-title", type=str, default="Android", help="scrcpy window title to capture")
     parser.add_argument("--capture-region", type=str, default=None, help="Override capture region as left,top,width,height (pixels)")
     parser.add_argument("--no-adb-fallback", action="store_true", help="Disable adb screencap fallback (fail if scrcpy capture fails)")
+    parser.add_argument("--no-adb-shell-stream", action="store_true", help="Disable persistent adb shell stream for input")
     parser.add_argument("--ui-probe-save", action="store_true", help="Save annotated UI probe frames")
     parser.add_argument("--ui-probe-dir", type=str, default=None, help="Directory to save UI probe frames")
     parser.add_argument("--ui-probe-log-every", type=float, default=None, help="Seconds between UI probe logs")
@@ -92,6 +93,8 @@ async def main_async(args: argparse.Namespace) -> None:
     if args.ok_tol is not None:
         cfg_kwargs["ok_button_tol"] = args.ok_tol
     cfg_kwargs["ui_probe_save_frames"] = args.ui_probe_save
+    if args.no_adb_shell_stream:
+        cfg_kwargs["use_adb_shell_stream"] = False
     cfg = EmulatorConfig(**cfg_kwargs)
     env = ClashRoyaleEmulatorEnv(cfg)
     cfg = RpcClientConfig(target=args.target, deadline_ms=args.deadline_ms, max_inflight=args.max_inflight)

@@ -136,6 +136,7 @@ class TrainConfig:
     encoder_type: str = "mlp"
     encoder_embed_size: int = 1024
     encoder_hidden: int = 512
+    perception_stride: int = 2
 
 
 def parse_args() -> TrainConfig:
@@ -160,6 +161,8 @@ def parse_args() -> TrainConfig:
     parser.add_argument("--save-perception-crops", action="store_true", help="Save elixir/time/arena crops for debugging")
     parser.add_argument("--snapshot-gap", type=int, default=TrainConfig.snapshot_gap, help="Save checkpoint every N iterations")
     parser.add_argument("--expl-decay", type=int, default=TrainConfig.expl_decay, help="Exploration decay rate in iterations (ε decays from 0.4 to 0.1 over this many iters)")
+    parser.add_argument("--perception-stride", type=int, default=TrainConfig.perception_stride,
+                        help="Run full perception every N frames to reduce latency (1 = every frame)")
     parser.add_argument("--encoder-type", type=str, default=TrainConfig.encoder_type, choices=["cnn", "mlp"],
                         help="Observation encoder type (cnn for conv, mlp for dense)")
     parser.add_argument("--encoder-embed-size", type=int, default=TrainConfig.encoder_embed_size,
@@ -191,6 +194,7 @@ def parse_args() -> TrainConfig:
         encoder_type=args.encoder_type,
         encoder_embed_size=args.encoder_embed_size,
         encoder_hidden=args.encoder_hidden,
+        perception_stride=args.perception_stride,
     )
 
 
@@ -255,7 +259,7 @@ def main() -> None:
 
         def _run_server():
             from src.perception.katacr_pipeline import KataCRVisionConfig
-            proc_cfg = ProcessorConfig()
+            proc_cfg = ProcessorConfig(perception_stride=cfg.perception_stride)
             vision_cfg = KataCRVisionConfig(
                 debug_save_parts=cfg.save_perception_crops,
                 debug_parts_dir=cfg.logdir / "perception_crops",

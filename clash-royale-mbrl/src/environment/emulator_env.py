@@ -108,6 +108,43 @@ class EmulatorConfig:
     ok_button_screen: Tuple[int, int] = (613, 2021)  # Screen-space coords at 1080x2400
     ok_button_color_bgr: Tuple[int, int, int] = (255, 187, 104)  # Target BGR of OK button
     ok_button_tol: int = 40  # Per-channel tolerance for OK color match
+    use_adb_shell_stream: bool = True  # Keep a persistent adb shell for faster input
+
+
+class ADBCommandStream:
+    """Persistent adb shell session to reduce per-command overhead."""
+
+    def __init__(self, config: EmulatorConfig):
+        cmd = [config.adb_path]
+        if config.device_serial:
+            cmd.extend(["-s", config.device_serial])
+        cmd.append("shell")
+        self._proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            bufsize=1,
+        )
+
+    def send(self, command: str) -> None:
+        if self._proc.poll() is not None:
+            raise RuntimeError("adb shell stream closed")
+        if self._proc.stdin is None:
+            raise RuntimeError("adb shell stream unavailable")
+        self._proc.stdin.write(command + "\n")
+        self._proc.stdin.flush()
+
+    def close(self) -> None:
+        if self._proc.poll() is None:
+            try:
+                if self._proc.stdin is not None:
+                    self._proc.stdin.write("exit\n")
+                    self._proc.stdin.flush()
+            except Exception:
+                pass
+            self._proc.terminate()
 
 
 class ADBController:
@@ -119,7 +156,13 @@ class ADBController:
     def __init__(self, config: EmulatorConfig):
         self.config = config
         self._check_adb()
-    
+        self._stream = None
+        if config.use_adb_shell_stream:
+            try:
+                self._stream = ADBCommandStream(config)
+            except Exception as exc:
+                print(f"[ADB] Failed to open shell stream, falling back to subprocess: {exc}")
+
     def _check_adb(self):
         """Verify ADB is available and device is connected."""
         try:
@@ -143,6 +186,16 @@ class ADBController:
         cmd.extend(args)
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         return result.stdout
+
+    def _shell_cmd(self, command: str) -> None:
+        if self._stream is not None:
+            try:
+                self._stream.send(command)
+                return
+            except Exception as exc:
+                print(f"[ADB] shell stream error, reverting to subprocess: {exc}")
+                self._stream = None
+        self._adb_cmd("shell", *command.split())
     
     def tap(self, x: int, y: int, duration_ms: int = 50):
         """
@@ -153,7 +206,7 @@ class ADBController:
             y: Y coordinate (0 = top)
             duration_ms: Tap duration in milliseconds
         """
-        self._adb_cmd("shell", "input", "tap", str(x), str(y))
+        self._shell_cmd(f"input tap {x} {y}")
     
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300):
         """
@@ -164,8 +217,7 @@ class ADBController:
             x2, y2: End coordinates  
             duration_ms: Swipe duration
         """
-        self._adb_cmd("shell", "input", "swipe", 
-                      str(x1), str(y1), str(x2), str(y2), str(duration_ms))
+        self._shell_cmd(f"input swipe {x1} {y1} {x2} {y2} {duration_ms}")
     
     def long_press(self, x: int, y: int, duration_ms: int = 500):
         """Long press at coordinates."""
@@ -173,7 +225,12 @@ class ADBController:
     
     def key_event(self, keycode: int):
         """Send key event (e.g., KEYCODE_BACK = 4)."""
-        self._adb_cmd("shell", "input", "keyevent", str(keycode))
+        self._shell_cmd(f"input keyevent {keycode}")
+
+    def close(self) -> None:
+        if self._stream is not None:
+            self._stream.close()
+            self._stream = None
 
 
 class ADBScreenshotter:

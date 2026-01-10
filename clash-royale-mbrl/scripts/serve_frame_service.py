@@ -20,12 +20,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--schema-version", type=str, default="v1", help="Schema version string")
     parser.add_argument("--model-version", type=str, default="dev", help="Model/version identifier")
     parser.add_argument("--max-message-mb", type=int, default=32, help="Max gRPC message size MB")
+    parser.add_argument("--perception-stride", type=int, default=2, help="Run perception every N frames")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    proc_cfg = ProcessorConfig(schema_version=args.schema_version, model_version=args.model_version)
+    proc_cfg = ProcessorConfig(
+        schema_version=args.schema_version,
+        model_version=args.model_version,
+        perception_stride=args.perception_stride,
+    )
     server_cfg = RpcServerConfig(
         host=args.host,
         port=args.port,

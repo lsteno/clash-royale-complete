@@ -27,6 +27,7 @@ class ProcessorConfig:
     schema_version: str = "v1"
     model_version: str = "dev"
     max_game_seconds: int = 360
+    perception_stride: int = 2
 
 
 class FrameServiceProcessor:
@@ -45,20 +46,27 @@ class FrameServiceProcessor:
         self._action_fn = action_fn
         self._bridge = bridge
         self._frame_count = 0
+        self._perception_stride = max(1, int(cfg.perception_stride))
+        self._last_result = None
+        self._last_grid = None
 
     async def process_frame(self, request: pb2.ProcessFrameRequest) -> pb2.ProcessFrameResponse:
         t0 = time.time()
         frame_bgr = self._decode_frame(request)
 
-        # Run perception (KataCR)
-        perception_result = self._perception.process(frame_bgr, deploy_cards=None)
+        # Run perception (KataCR) on a stride to reduce latency.
+        self._frame_count += 1
+        run_perception = (self._frame_count % self._perception_stride == 0) or self._last_result is None
+        if run_perception:
+            perception_result = self._perception.process(frame_bgr, deploy_cards=None)
+        else:
+            perception_result = self._last_result
 
         # Detect end-of-match via UI color probe on the received frame.
         match_over = _detect_match_over(frame_bgr)
 
         # Log tower HP every 5 frames
-        self._frame_count += 1
-        if self._frame_count % 5 == 0:
+        if self._frame_count % 5 == 0 and perception_result is not None:
             rb = self._perception.reward_builder
             hp_tower = rb.hp_tower  # shape (2, 2): [ally/enemy][left/right]
             hp_king = rb.hp_king_tower  # shape (2,): [ally, enemy]
@@ -68,12 +76,20 @@ class FrameServiceProcessor:
                 f"enemy_left={hp_tower[1,0]} enemy_right={hp_tower[1,1]} enemy_king={hp_king[1]}"
             )
 
-        # Encode grid to float32 CxHxW row-major
-        grid = self._encoder.encode(
-            perception_result.state,
-            self._perception.reward_builder,
-            perception_result.info,
-        )
+        if perception_result is None:
+            raise RuntimeError("Perception result missing on first frame")
+
+        if run_perception:
+            # Encode grid to float32 CxHxW row-major
+            grid = self._encoder.encode(
+                perception_result.state,
+                self._perception.reward_builder,
+                perception_result.info,
+            )
+            self._last_result = perception_result
+            self._last_grid = grid
+        else:
+            grid = self._last_grid
 
         # Build state grid message
         state_grid = pb2.StateGrid(
@@ -86,6 +102,8 @@ class FrameServiceProcessor:
 
         latency_ms = (time.time() - t0) * 1000.0
         reward_value = float(perception_result.reward if perception_result.reward is not None else 0.0)
+        if not run_perception:
+            reward_value = 0.0
         done_value = bool(match_over)
         
         def _safe_float(value, default: float) -> float:
