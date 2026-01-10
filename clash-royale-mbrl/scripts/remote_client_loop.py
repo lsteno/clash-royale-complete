@@ -34,6 +34,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--capture-region", type=str, default=None, help="Override capture region as left,top,width,height (pixels)")
     parser.add_argument("--no-adb-fallback", action="store_true", help="Disable adb screencap fallback (fail if scrcpy capture fails)")
     parser.add_argument("--no-adb-shell-stream", action="store_true", help="Disable persistent adb shell stream for input")
+    parser.add_argument("--input-backend", type=str, default="adb", choices=["adb", "scrcpy"],
+                        help="Input backend for taps (adb or scrcpy control socket)")
+    parser.add_argument("--scrcpy-host", type=str, default="127.0.0.1", help="scrcpy control host")
+    parser.add_argument("--scrcpy-port", type=int, default=27183, help="scrcpy control port")
+    parser.add_argument("--scrcpy-no-fallback", action="store_true", help="Disable fallback to adb if scrcpy control fails")
     parser.add_argument("--ui-probe-save", action="store_true", help="Save annotated UI probe frames")
     parser.add_argument("--ui-probe-dir", type=str, default=None, help="Directory to save UI probe frames")
     parser.add_argument("--ui-probe-log-every", type=float, default=None, help="Seconds between UI probe logs")
@@ -95,6 +100,11 @@ async def main_async(args: argparse.Namespace) -> None:
     cfg_kwargs["ui_probe_save_frames"] = args.ui_probe_save
     if args.no_adb_shell_stream:
         cfg_kwargs["use_adb_shell_stream"] = False
+    cfg_kwargs["input_backend"] = args.input_backend
+    cfg_kwargs["scrcpy_control_host"] = args.scrcpy_host
+    cfg_kwargs["scrcpy_control_port"] = args.scrcpy_port
+    if args.scrcpy_no_fallback:
+        cfg_kwargs["scrcpy_fallback_to_adb"] = False
     cfg = EmulatorConfig(**cfg_kwargs)
     env = ClashRoyaleEmulatorEnv(cfg)
     cfg = RpcClientConfig(target=args.target, deadline_ms=args.deadline_ms, max_inflight=args.max_inflight)

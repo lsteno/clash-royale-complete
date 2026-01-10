@@ -10,6 +10,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Optional, Sequence, Tuple
+import socket
+import struct
 
 import cv2
 import mss
@@ -59,7 +61,7 @@ class MatchNavigationConfig:
 class MatchNavigator:
     """Utility class that replays canned tap sequences via ADB."""
 
-    def __init__(self, adb: "ADBController", cfg: MatchNavigationConfig):
+    def __init__(self, adb: "InputController", cfg: MatchNavigationConfig):
         self.adb = adb
         self.cfg = cfg
 
@@ -109,6 +111,11 @@ class EmulatorConfig:
     ok_button_color_bgr: Tuple[int, int, int] = (255, 187, 104)  # Target BGR of OK button
     ok_button_tol: int = 40  # Per-channel tolerance for OK color match
     use_adb_shell_stream: bool = True  # Keep a persistent adb shell for faster input
+    input_backend: str = "adb"  # "adb" or "scrcpy"
+    scrcpy_control_host: str = "127.0.0.1"
+    scrcpy_control_port: int = 27183
+    scrcpy_connect_timeout: float = 1.0
+    scrcpy_fallback_to_adb: bool = True
 
 
 class ADBCommandStream:
@@ -233,6 +240,76 @@ class ADBController:
             self._stream = None
 
 
+class ScrcpyController:
+    """Minimal scrcpy control socket client for faster input injection."""
+
+    _MSG_TYPE_INJECT_TOUCH = 2
+    _ACTION_DOWN = 0
+    _ACTION_UP = 1
+    _ACTION_MOVE = 2
+
+    def __init__(self, config: EmulatorConfig, adb_fallback: Optional[ADBController] = None):
+        self.config = config
+        self._adb_fallback = adb_fallback
+        self._pointer_id = 0
+        self._sock = socket.create_connection(
+            (config.scrcpy_control_host, config.scrcpy_control_port),
+            timeout=config.scrcpy_connect_timeout,
+        )
+        self._sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        self._sock.settimeout(0.05)
+        # Scrcpy control socket does not send data; ignore any pending bytes.
+        try:
+            self._sock.recv(64)
+        except Exception:
+            pass
+        self._sock.settimeout(None)
+
+    def _send_touch(self, action: int, x: int, y: int, pressure: int) -> None:
+        msg = struct.pack(
+            ">BBQIIHHHI",
+            self._MSG_TYPE_INJECT_TOUCH,
+            action,
+            self._pointer_id,
+            int(x),
+            int(y),
+            int(self.config.screen_width),
+            int(self.config.screen_height),
+            int(pressure),
+            0,
+        )
+        self._sock.sendall(msg)
+
+    def tap(self, x: int, y: int, duration_ms: int = 50):
+        self._send_touch(self._ACTION_DOWN, x, y, 0xFFFF)
+        if duration_ms > 0:
+            time.sleep(duration_ms / 1000.0)
+        self._send_touch(self._ACTION_UP, x, y, 0)
+
+    def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300):
+        steps = max(2, int(duration_ms / 16))
+        self._send_touch(self._ACTION_DOWN, x1, y1, 0xFFFF)
+        for i in range(1, steps):
+            t = i / steps
+            xi = int(x1 + (x2 - x1) * t)
+            yi = int(y1 + (y2 - y1) * t)
+            self._send_touch(self._ACTION_MOVE, xi, yi, 0xFFFF)
+            time.sleep(duration_ms / 1000.0 / steps)
+        self._send_touch(self._ACTION_UP, x2, y2, 0)
+
+    def key_event(self, keycode: int):
+        if self._adb_fallback is not None:
+            self._adb_fallback.key_event(keycode)
+        else:
+            raise NotImplementedError("scrcpy key events are not implemented")
+
+    def close(self) -> None:
+        try:
+            self._sock.close()
+        except Exception:
+            pass
+
+
 class ADBScreenshotter:
     """Fallback frame capture using `adb exec-out screencap -p`."""
 
@@ -330,6 +407,9 @@ class ScreenCapture:
         return frame
 
 
+InputController = ADBController | ScrcpyController
+
+
 class ClashRoyaleEmulatorEnv:
     """
     Gymnasium-compatible environment for Clash Royale via Android emulator.
@@ -345,7 +425,7 @@ class ClashRoyaleEmulatorEnv:
     
     def __init__(self, config: Optional[EmulatorConfig] = None):
         self.config = config or EmulatorConfig()
-        self.adb = ADBController(self.config)
+        self.adb = self._build_input_controller()
         self.screen = ScreenCapture(self.config)
         self.navigator = (
             MatchNavigator(self.adb, self.config.navigation)
@@ -369,6 +449,19 @@ class ClashRoyaleEmulatorEnv:
             "left": 0.15,
             "right": 0.85
         }
+
+    def _build_input_controller(self) -> InputController:
+        if self.config.input_backend == "scrcpy":
+            try:
+                print(f"[Input] Using scrcpy control at {self.config.scrcpy_control_host}:{self.config.scrcpy_control_port}")
+                adb_fallback = ADBController(self.config) if self.config.scrcpy_fallback_to_adb else None
+                return ScrcpyController(self.config, adb_fallback=adb_fallback)
+            except Exception as exc:
+                if self.config.scrcpy_fallback_to_adb:
+                    print(f"[Input] scrcpy control unavailable, falling back to adb: {exc}")
+                    return ADBController(self.config)
+                raise
+        return ADBController(self.config)
         
     def get_observation(self) -> np.ndarray:
         """Get current screen frame."""
