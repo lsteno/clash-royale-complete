@@ -132,6 +132,7 @@ class TrainConfig:
     rpc_port: int = 50051
     save_perception_crops: bool = False
     snapshot_gap: int = 5000  # Save checkpoint every N iterations
+    expl_decay: int = 18000  # Exploration decay rate (iterations to reach expl_min)
 
 
 def parse_args() -> TrainConfig:
@@ -155,6 +156,7 @@ def parse_args() -> TrainConfig:
     parser.add_argument("--rpc-port", type=int, default=TrainConfig.rpc_port, help="FrameService listen port (Machine A)")
     parser.add_argument("--save-perception-crops", action="store_true", help="Save elixir/time/arena crops for debugging")
     parser.add_argument("--snapshot-gap", type=int, default=TrainConfig.snapshot_gap, help="Save checkpoint every N iterations")
+    parser.add_argument("--expl-decay", type=int, default=TrainConfig.expl_decay, help="Exploration decay rate in iterations (ε decays from 0.4 to 0.1 over this many iters)")
     args = parser.parse_args()
     return TrainConfig(
         logdir=args.logdir,
@@ -176,6 +178,7 @@ def parse_args() -> TrainConfig:
         rpc_port=args.rpc_port,
         save_perception_crops=args.save_perception_crops,
         snapshot_gap=args.snapshot_gap,
+        expl_decay=args.expl_decay,
     )
 
 
@@ -265,12 +268,14 @@ def main() -> None:
         train_every=cfg.train_every,
         train_steps=cfg.train_steps,
     )
+    # Exploration schedule: ε decays linearly from train_noise (0.4) to expl_min (0.1)
+    # over expl_decay iterations. Formula: ε(itr) = max(0.1, 0.4 - itr/expl_decay)
     agent = AtariDreamerAgent(
         train_noise=0.4,
         eval_noise=0.0,
         expl_type="epsilon_greedy",
         expl_min=0.1,
-        expl_decay=2000 / 0.3,
+        expl_decay=cfg.expl_decay,
         model_kwargs=dict(use_pcont=True),
     )
     runner = MinibatchRl(
