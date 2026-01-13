@@ -21,7 +21,12 @@ classifiers = [
 dependencies = [
     "torch>=2.0.0",
     "torchvision>=0.15.0",
-    "dreamer-pytorch>=0.2.3",
+    "jax>=0.4.26",
+    "elements>=3.19.1",
+    "portal>=3.5.0",
+    "ninjax>=3.5.1",
+    "granular>=0.20.3",
+    "ruamel.yaml>=0.18.0",
     "ultralytics>=8.1.24",
     "grpcio>=1.62.0",
     "grpcio-tools>=1.62.0",
@@ -53,7 +58,7 @@ wandb = [
 ]
 
 [project.scripts]
-train_online = "train_online:main"
+train_dreamerv3 = "train_dreamerv3:main"
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
@@ -61,7 +66,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
-py-modules = ["train_online"]
+py-modules = ["train_dreamerv3"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

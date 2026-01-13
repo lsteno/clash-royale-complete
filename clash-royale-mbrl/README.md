@@ -78,15 +78,17 @@ cd clash-royale-complete
 python3.11 -m venv .venv
 source .venv/bin/activate
 
-# 3. Install dependencies
+# 3. Install dependencies (DreamerV3 default)
 cd clash-royale-mbrl
-pip install -r requirements-frozen.txt
+pip install -e .
+# For NVIDIA GPUs, install matching jaxlib:
+# pip install --upgrade "jaxlib[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 
 # 4. Download KataCR weights
 python scripts/download_weights.py
 
-# 5. Start training server (listens for frames from Machine B)
-python train_online.py --use-remote-frames --rpc-host 0.0.0.0 --rpc-port 50051
+# 5. Start DreamerV3 training server (listens for frames from Machine B)
+python train_dreamerv3.py --rpc-host 0.0.0.0 --rpc-port 50051
 ```
 
 ### Machine B (Mac - Emulator)
@@ -152,7 +154,8 @@ import jax  # Too late - CUDA already broken
 
 ```
 clash-royale-mbrl/
-├── train_online.py             # Main training entry (gRPC server + Dreamer)
+├── train_dreamerv3.py          # Main training entry (gRPC server + DreamerV3)
+├── train_online.py             # Legacy DreamerV1/rlpyt entry (deprecated)
 ├── requirements-frozen.txt     # Pinned package versions (working)
 ├── requirements-apple-silicon.txt  # macOS deps
 │
@@ -189,7 +192,8 @@ clash-royale-mbrl/
 
 | File | Description |
 |------|-------------|
-| `train_online.py` | Entry point: starts gRPC server + Dreamer training loop |
+| `train_dreamerv3.py` | Entry point: gRPC server + DreamerV3 training loop |
+| `train_online.py` | Legacy DreamerV1/rlpyt entry (deprecated) |
 | `src/cr/rpc/v1/processor.py` | Processes frames: KataCR perception → state grid |
 | `src/environment/remote_bridge.py` | Bridges gRPC observations to Dreamer sampler |
 | `scripts/remote_client_loop.py` | Client: captures emulator frames, sends to server |
@@ -214,15 +218,13 @@ clash-royale-mbrl/
 
 ## Configuration
 
-### gRPC Server Settings
+### gRPC Server Settings (DreamerV3)
 
 ```bash
-python train_online.py \
-  --use-remote-frames \
+python train_dreamerv3.py \
   --rpc-host 0.0.0.0 \    # Listen on all interfaces
   --rpc-port 50051 \      # gRPC port
-  --num-envs 1 \          # Number of parallel environments
-  --batch-T 8             # Trajectory length per batch
+  --logdir ./logs_dreamerv3
 ```
 
 ### Firewall (GCP)
