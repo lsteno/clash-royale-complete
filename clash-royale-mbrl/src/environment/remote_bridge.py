@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
-from src.environment.online_env import ActionMapper, DEFAULT_DEPLOY_CELLS
+from src.environment.action_utils import ActionMapper, DEFAULT_DEPLOY_CELLS
 from src.environment.action_mask import compute_action_mask, set_action_mask
 from rlpyt.envs.base import EnvSpaces, EnvStep
 from dreamer.envs.env import EnvInfo
