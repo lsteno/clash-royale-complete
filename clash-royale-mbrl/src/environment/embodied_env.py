@@ -230,11 +230,13 @@ class ClashRoyaleEmbodiedEnv(embodied.Env):
         """Return the observation space dictionary.
         
         DreamerV3 requires specific keys: is_first, is_last, is_terminal, reward.
-        We add 'state' for our observation tensor.
+        We add 'state' for our observation tensor and 'action_mask' for masking.
         """
         spaces = {
             # Main observation - flattened state vector or spatial tensor
             'state': elements.Space(np.float32, self._obs_shape),
+            # Action mask: additive logits (0.0 = legal, -1e9 = illegal)
+            'action_mask': elements.Space(np.float32, (ACTION_SPEC.size,)),
             # Required by DreamerV3
             'reward': elements.Space(np.float32),
             'is_first': elements.Space(bool),
@@ -382,37 +384,49 @@ class ClashRoyaleEmbodiedEnv(embodied.Env):
         if self._current_step is None:
             # Return zeros if no step available (shouldn't happen in normal operation)
             state = np.zeros(self._obs_shape, dtype=np.float32)
+            action_mask = np.zeros(ACTION_SPEC.size, dtype=np.float32)
         else:
             state = self._current_step.obs.astype(np.float32)
             if self._flatten_obs:
                 state = state.reshape(-1)
+            # Compute action mask from current step info
+            action_mask = self._compute_action_mask()
         
         return {
             'state': state,
+            'action_mask': action_mask,
             'reward': np.float32(reward),
             'is_first': is_first,
             'is_last': is_last,
             'is_terminal': is_terminal,
         }
 
-    def _apply_action_mask(self) -> None:
-        """Compute and store the action mask for the current state.
+    def _compute_action_mask(self) -> np.ndarray:
+        """Compute the action mask for the current state.
         
-        The mask is stored in a context variable that can be accessed by
-        the policy during action sampling to mask out illegal actions.
+        Returns:
+            Action mask of shape (action_size,) with 0.0 for legal actions
+            and -1e9 for illegal actions. This is an additive mask for logits.
         """
         if self._current_step is None:
-            set_action_mask(None)
-            return
+            return np.zeros(ACTION_SPEC.size, dtype=np.float32)
             
         info = self._current_step.info
         if not isinstance(info, dict):
-            set_action_mask(None)
-            return
+            return np.zeros(ACTION_SPEC.size, dtype=np.float32)
             
         cards = info.get("cards")
         elixir = info.get("elixir", 0)
         mask = compute_action_mask(cards, elixir)
+        return mask.astype(np.float32)
+
+    def _apply_action_mask(self) -> None:
+        """Compute and store the action mask in context variable.
+        
+        This is kept for backward compatibility with the context-variable
+        approach. The preferred method is now observation augmentation.
+        """
+        mask = self._compute_action_mask()
         set_action_mask(mask)
 
     def _decode_action(self, action_idx: int) -> Optional[Tuple[int, int, int]]:
@@ -454,3 +468,123 @@ def make_clash_royale_env(bridge: RemoteBridgeV3, **kwargs) -> ClashRoyaleEmbodi
         A ClashRoyaleEmbodiedEnv instance.
     """
     return ClashRoyaleEmbodiedEnv(bridge=bridge, **kwargs)
+
+
+class MaskedAgent:
+    """Wrapper that applies action masking to a DreamerV3 agent's policy.
+    
+    This wrapper intercepts the policy() call and applies the action mask
+    from the observation to the agent's action logits before sampling.
+    The mask is expected in obs['action_mask'] as additive logits
+    (0.0 = legal, -1e9 = illegal).
+    
+    Usage:
+        agent = Agent(obs_space, act_space, config)
+        masked_agent = MaskedAgent(agent, action_key='action')
+    """
+    
+    def __init__(self, agent, action_key: str = 'action'):
+        """Initialize the masked agent wrapper.
+        
+        Args:
+            agent: The underlying DreamerV3 agent.
+            action_key: The key in act_space for the discrete action to mask.
+        """
+        self._agent = agent
+        self._action_key = action_key
+    
+    def __getattr__(self, name: str):
+        """Delegate all attributes to the underlying agent."""
+        return getattr(self._agent, name)
+    
+    def policy(self, carry, obs, mode='train'):
+        """Policy with action masking applied.
+        
+        This method:
+        1. Calls the underlying agent's policy
+        2. Extracts the action mask from observations
+        3. Re-samples actions with the mask applied to logits
+        
+        Note: This implementation works by modifying the sampled action
+        after the fact using the mask. For full integration, the mask
+        should be applied before sampling in the agent's policy head.
+        """
+        import jax
+        import jax.numpy as jnp
+        import ninjax as nj
+        
+        # Get the action mask from observations
+        action_mask = obs.get('action_mask')
+        
+        # Call underlying policy
+        carry, act, out = self._agent.policy(carry, obs, mode)
+        
+        if action_mask is None:
+            return carry, act, out
+        
+        # Apply mask to the action by re-sampling with masked logits
+        # We need to get the policy distribution and apply the mask
+        # For now, we'll use a simpler approach: if the sampled action
+        # is illegal, sample from legal actions only
+        
+        if self._action_key in act:
+            sampled_action = act[self._action_key]
+            
+            # Check if sampled action is legal (mask value is 0.0 for legal)
+            # action_mask shape: (batch, action_size) or (action_size,)
+            mask = jnp.asarray(action_mask)
+            
+            # If mask has batch dimension, index into it
+            if mask.ndim == 2:
+                # Gather the mask value for the sampled action
+                batch_indices = jnp.arange(sampled_action.shape[0])
+                mask_values = mask[batch_indices, sampled_action]
+            else:
+                mask_values = mask[sampled_action]
+            
+            # If action is illegal (mask < -1e8), resample from legal actions
+            is_illegal = mask_values < -1e8
+            
+            if jnp.any(is_illegal):
+                # Create uniform distribution over legal actions
+                legal_mask = mask >= -1e8  # True for legal actions
+                
+                # Sample uniformly from legal actions where current is illegal
+                if mask.ndim == 2:
+                    # Batch case
+                    def resample_one(args):
+                        illegal, legal, old_action = args
+                        legal_indices = jnp.where(legal, size=legal.shape[0])[0]
+                        num_legal = jnp.sum(legal)
+                        new_idx = jax.random.randint(
+                            nj.seed(), (), 0, jnp.maximum(num_legal, 1))
+                        new_action = legal_indices[new_idx]
+                        return jnp.where(illegal, new_action, old_action)
+                    
+                    new_actions = jax.vmap(resample_one)(
+                        (is_illegal, legal_mask, sampled_action))
+                else:
+                    # Single case
+                    legal_indices = jnp.where(legal_mask, size=mask.shape[0])[0]
+                    num_legal = jnp.sum(legal_mask)
+                    new_idx = jax.random.randint(
+                        nj.seed(), (), 0, jnp.maximum(num_legal, 1))
+                    new_action = legal_indices[new_idx]
+                    new_actions = jnp.where(is_illegal, new_action, sampled_action)
+                
+                act = {**act, self._action_key: new_actions}
+        
+        return carry, act, out
+
+
+def make_masked_agent(agent, action_key: str = 'action') -> MaskedAgent:
+    """Factory function to wrap an agent with action masking.
+    
+    Args:
+        agent: The underlying DreamerV3 agent.
+        action_key: The key in act_space for the discrete action to mask.
+        
+    Returns:
+        A MaskedAgent wrapper.
+    """
+    return MaskedAgent(agent, action_key=action_key)

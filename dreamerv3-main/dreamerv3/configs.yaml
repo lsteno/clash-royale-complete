@@ -201,6 +201,34 @@ multicpu:
   jax.policy_devices: [0, 1]
   jax.train_devices: [2, 3, 4, 5, 6, 7]
 
+clash_royale:
+  <<: *size12m
+  task: clash_royale
+  batch_size: 16
+  batch_length: 32
+  report_length: 16
+  replay:
+    size: 5e5
+    chunksize: 512
+    online: True
+  agent:
+    enc:
+      typ: simple
+      simple: {layers: 3, units: 512, symlog: True}
+    dec:
+      typ: simple
+      simple: {layers: 3, units: 512}
+    imag_length: 15
+    horizon: 333
+  run:
+    steps: 1e6
+    envs: 1
+    train_ratio: 128
+    log_every: 60
+    report_every: 300
+    save_every: 300
+    episode_timeout: 600
+
 debug:
   batch_size: 8
   batch_length: 10

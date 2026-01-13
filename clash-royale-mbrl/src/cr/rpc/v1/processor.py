@@ -15,7 +15,7 @@ from cr.rpc.v1 import frame_service_pb2 as pb2
 from src.environment.online_env import StateTensorEncoder
 from src.perception.katacr_pipeline import KataCRPerceptionEngine, KataCRVisionConfig
 from src.specs import OBS_SPEC
-from src.environment.remote_bridge import RemoteBridge
+from src.environment.embodied_env import RemoteBridgeV3
 
 ActionFn = Callable[[np.ndarray, dict, float, dict], Optional[pb2.Action]]
 
@@ -37,7 +37,7 @@ class FrameServiceProcessor:
         cfg: ProcessorConfig = ProcessorConfig(),
         vision_cfg: Optional[KataCRVisionConfig] = None,
         action_fn: Optional[ActionFn] = None,
-        bridge: Optional[RemoteBridge] = None,
+        bridge: Optional[RemoteBridgeV3] = None,
     ):
         self._cfg = cfg
         self._perception = KataCRPerceptionEngine(vision_cfg)

@@ -17,6 +17,8 @@ from .embodied_env import (
     RemoteBridgeV3,
     RemoteStepV3,
     make_clash_royale_env,
+    MaskedAgent,
+    make_masked_agent,
 )
 
 # Shared utilities (no heavy dependencies)
