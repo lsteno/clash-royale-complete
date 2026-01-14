@@ -141,6 +141,9 @@ class TrainConfig:
     configs: tuple = ("defaults",)  # Config presets to load
     save_perception_crops: bool = False
     seed: int = 0
+    pixels: bool = False  # If True, train directly from emulator RGB frames (no encoder)
+    pixel_height: int = 180
+    pixel_width: int = 320
     
     # Override specific settings
     steps: Optional[int] = None
@@ -161,6 +164,12 @@ def parse_args() -> tuple[TrainConfig, list[str]]:
                         help="Config presets to load (e.g., 'defaults', 'debug', 'size12m')")
     parser.add_argument("--save-perception-crops", action="store_true")
     parser.add_argument("--seed", type=int, default=TrainConfig.seed)
+    parser.add_argument("--pixels", action="store_true",
+                        help="Train directly from raw emulator RGB frames (channels-last)")
+    parser.add_argument("--pixel-height", type=int, default=TrainConfig.pixel_height,
+                        help="Target pixel observation height (when --pixels)")
+    parser.add_argument("--pixel-width", type=int, default=TrainConfig.pixel_width,
+                        help="Target pixel observation width (when --pixels)")
     parser.add_argument("--steps", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--train-ratio", type=float, default=None)
@@ -174,6 +183,9 @@ def parse_args() -> tuple[TrainConfig, list[str]]:
         configs=tuple(args.configs),
         save_perception_crops=args.save_perception_crops,
         seed=args.seed,
+        pixels=args.pixels,
+        pixel_height=args.pixel_height,
+        pixel_width=args.pixel_width,
         steps=args.steps,
         batch_size=args.batch_size,
         train_ratio=args.train_ratio,
@@ -208,6 +220,11 @@ def load_config(train_cfg: TrainConfig, remaining_args: list[str]) -> elements.C
         cli_overrides['batch_size'] = train_cfg.batch_size
     if train_cfg.train_ratio is not None:
         cli_overrides['run.train_ratio'] = train_cfg.train_ratio
+
+    # Pixel mode toggles RGB observations instead of encoded grids
+    cli_overrides['pixels'] = train_cfg.pixels
+    cli_overrides['pixel_height'] = train_cfg.pixel_height
+    cli_overrides['pixel_width'] = train_cfg.pixel_width
     
     cli_overrides['logdir'] = str(train_cfg.logdir)
     cli_overrides['seed'] = train_cfg.seed
@@ -218,6 +235,13 @@ def load_config(train_cfg: TrainConfig, remaining_args: list[str]) -> elements.C
     if remaining_args:
         config = elements.Flags(config).parse(remaining_args)
     
+    # If pixel observations are requested, switch encoder/decoder to CNN
+    if train_cfg.pixels:
+        config = config.update({
+            'agent.enc.typ': 'cnn',
+            'agent.dec.typ': 'cnn',
+        })
+
     # Add timestamp to logdir if not already present
     config = config.update(logdir=(
         config.logdir.format(timestamp=elements.timestamp())
@@ -234,7 +258,18 @@ def load_config(train_cfg: TrainConfig, remaining_args: list[str]) -> elements.C
 def make_agent(config: elements.Config, bridge: RemoteBridgeV3):
     """Create the DreamerV3 agent."""
     # Create a temporary env to get obs/act spaces
-    env = ClashRoyaleEmbodiedEnv(bridge)
+    obs_shape_override = None
+    flatten_obs = True
+    if getattr(config, 'pixels', False):
+        # Use channels-last RGB observations when pixel training
+        obs_shape_override = (
+            int(getattr(config, 'pixel_height', 180)),
+            int(getattr(config, 'pixel_width', 320)),
+            3,
+        )
+        flatten_obs = False
+
+    env = ClashRoyaleEmbodiedEnv(bridge, flatten_obs=flatten_obs, obs_shape_override=obs_shape_override)
     
     # Filter spaces for agent
     notlog = lambda k: not k.startswith('log/')
@@ -267,10 +302,23 @@ def make_agent(config: elements.Config, bridge: RemoteBridgeV3):
 
 def make_env(config: elements.Config, bridge: RemoteBridgeV3, index: int = 0):
     """Create the Clash Royale environment."""
+    obs_shape_override = None
+    flatten_obs = True  # Default: flattened state grid
+
+    if getattr(config, 'pixels', False):
+        # Channels-last RGB from emulator for pixel-based training
+        obs_shape_override = (
+            int(getattr(config, 'pixel_height', 180)),
+            int(getattr(config, 'pixel_width', 320)),
+            3,
+        )
+        flatten_obs = False
+
     env = ClashRoyaleEmbodiedEnv(
         bridge=bridge,
         step_timeout=config.run.episode_timeout,
-        flatten_obs=True,  # Flatten for MLP encoder
+        flatten_obs=flatten_obs,
+        obs_shape_override=obs_shape_override,
     )
     # Apply standard wrappers
     env = wrap_env(env, config)
@@ -383,6 +431,9 @@ def start_grpc_server(
             proc_cfg,
             vision_cfg=vision_cfg,
             bridge=bridge,
+            use_pixels=bool(config.pixels),
+            pixel_height=int(getattr(config, 'pixel_height', 180)),
+            pixel_width=int(getattr(config, 'pixel_width', 320)),
         )
         server_cfg = RpcServerConfig(
             host=train_cfg.rpc_host,

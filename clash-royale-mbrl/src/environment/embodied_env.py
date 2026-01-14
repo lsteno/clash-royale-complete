@@ -199,6 +199,7 @@ class ClashRoyaleEmbodiedEnv(embodied.Env):
         bridge: RemoteBridgeV3,
         step_timeout: float = 60.0,
         flatten_obs: bool = True,
+        obs_shape_override: Optional[tuple[int, ...]] = None,
     ):
         """Initialize the environment.
         
@@ -219,8 +220,10 @@ class ClashRoyaleEmbodiedEnv(embodied.Env):
         self._episode_length = 0
         self._is_first = True  # Will be True on first step after reset
         
-        # Compute observation shape
-        if flatten_obs:
+        # Compute observation shape (allow override for pixel training)
+        if obs_shape_override is not None:
+            self._obs_shape = obs_shape_override
+        elif flatten_obs:
             self._obs_shape = (OBS_SPEC.channels * OBS_SPEC.height * OBS_SPEC.width,)
         else:
             self._obs_shape = OBS_SPEC.shape

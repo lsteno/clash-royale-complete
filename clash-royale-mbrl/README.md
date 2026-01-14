@@ -225,6 +225,9 @@ python train_dreamerv3.py \
   --rpc-host 0.0.0.0 \    # Listen on all interfaces
   --rpc-port 50051 \      # gRPC port
   --logdir ./logs_dreamerv3
+
+# Optional: train directly from emulator pixels (channels-last RGB)
+python train_dreamerv3.py --pixels --pixel-height 180 --pixel-width 320
 ```
 
 ### Firewall (GCP)

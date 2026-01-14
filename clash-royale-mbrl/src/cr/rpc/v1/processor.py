@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional, Sequence, Tuple
 
 import numpy as np
+import cv2
 
 from cr.rpc.v1 import frame_service_pb2 as pb2
 from src.environment.online_env import StateTensorEncoder
@@ -38,6 +39,9 @@ class FrameServiceProcessor:
         vision_cfg: Optional[KataCRVisionConfig] = None,
         action_fn: Optional[ActionFn] = None,
         bridge: Optional[RemoteBridgeV3] = None,
+        use_pixels: bool = False,
+        pixel_height: int = 180,
+        pixel_width: int = 320,
     ):
         self._cfg = cfg
         self._perception = KataCRPerceptionEngine(vision_cfg)
@@ -45,6 +49,9 @@ class FrameServiceProcessor:
         self._action_fn = action_fn
         self._bridge = bridge
         self._frame_count = 0
+        self._use_pixels = use_pixels
+        self._pixel_height = int(pixel_height)
+        self._pixel_width = int(pixel_width)
 
     async def process_frame(self, request: pb2.ProcessFrameRequest) -> pb2.ProcessFrameResponse:
         t0 = time.time()
@@ -68,21 +75,31 @@ class FrameServiceProcessor:
                 f"enemy_left={hp_tower[1,0]} enemy_right={hp_tower[1,1]} enemy_king={hp_king[1]}"
             )
 
-        # Encode grid to float32 CxHxW row-major
-        grid = self._encoder.encode(
-            perception_result.state,
-            self._perception.reward_builder,
-            perception_result.info,
-        )
+        # Encode observation: grid (default) or raw pixels (optional)
+        if self._use_pixels:
+            # Resize to requested spatial dimensions and normalize to 0-1 float32
+            resized = self._resize_frame(frame_bgr, self._pixel_width, self._pixel_height)
+            obs = resized.astype(np.float32) / 255.0
+        else:
+            obs = self._encoder.encode(
+                perception_result.state,
+                self._perception.reward_builder,
+                perception_result.info,
+            )
 
         # Build state grid message
+        if self._use_pixels:
+            c, h, w = 3, self._pixel_height, self._pixel_width
+        else:
+            c, h, w = int(obs.shape[0]), int(obs.shape[1]), int(obs.shape[2])
+
         state_grid = pb2.StateGrid(
-            channels=int(grid.shape[0]),
-            height=int(grid.shape[1]),
-            width=int(grid.shape[2]),
+            channels=int(c),
+            height=int(h),
+            width=int(w),
             dtype="float32",
         )
-        state_grid.values.extend(grid.astype(np.float32).ravel().tolist())
+        state_grid.values.extend(obs.astype(np.float32).ravel().tolist())
 
         latency_ms = (time.time() - t0) * 1000.0
         reward_value = float(perception_result.reward if perception_result.reward is not None else 0.0)
@@ -100,12 +117,12 @@ class FrameServiceProcessor:
         if request.want_action:
             if self._bridge is not None:
                 # Hand the observation to the local trainer and wait for its action.
-                act_tuple = self._bridge.publish(grid, reward_value, done_value, perception_result.info)
+                act_tuple = self._bridge.publish(obs, reward_value, done_value, perception_result.info)
                 if act_tuple is not None:
                     print(f"[processor] bridge action={act_tuple}")
                     action_msg = pb2.Action(card_idx=int(act_tuple[0]), grid_x=int(act_tuple[1]), grid_y=int(act_tuple[2]))
             elif self._action_fn is not None:
-                act = self._action_fn(grid, perception_result.state, perception_result.reward, perception_result.info)
+                act = self._action_fn(obs, perception_result.state, perception_result.reward, perception_result.info)
                 if act is not None:
                     print(f"[processor] action_fn returned {act}")
                     action_msg = act
@@ -143,6 +160,13 @@ class FrameServiceProcessor:
             # Clear KataCR state/reward history before the next match begins.
             self._perception.reset()
         return resp
+
+    def _resize_frame(self, frame: np.ndarray, width: int, height: int) -> np.ndarray:
+        import cv2
+
+        if frame.shape[1] == width and frame.shape[0] == height:
+            return frame
+        return cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
 
     async def heartbeat(self, request: pb2.HeartbeatRequest) -> pb2.HeartbeatResponse:
         return pb2.HeartbeatResponse(
