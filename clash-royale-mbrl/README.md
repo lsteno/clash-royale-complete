@@ -24,24 +24,26 @@ Based on [KataCR](https://github.com/wty-yy/KataCR) perception and the paper ["K
 │  Machine B (Mac/Local)              Machine A (GCP/GPU Server)              │
 │  ┌─────────────────────┐            ┌──────────────────────────────┐        │
 │  │  Android Emulator   │            │      FrameService (gRPC)     │        │
-│  │  Clash Royale Game  │───BGR───▶  │  ┌────────────────────────┐  │        │
-│  │                     │  frames    │  │   KataCR Perception    │  │        │
-│  │  remote_client_loop │            │  │  - YOLOv8 Detection    │  │        │
-│  │  ◀──────────────────│◀─actions── │  │  - Card Classification │  │        │
-│  │                     │            │  │  - OCR (PaddleOCR)     │  │        │
-│  └─────────────────────┘            │  └────────────────────────┘  │        │
-│                                     │             │                 │        │
-│                                     │             ▼                 │        │
+│  │  Clash Royale Game  │───BGR───▶  │                              │        │
+│  │                     │  frames    │  ┌────────────────────────┐  │        │
+│  │  remote_client_loop │            │  │  State Grid Mode       │  │        │
+│  │  ◀──────────────────│◀─actions── │  │  - KataCR Perception   │  │        │
+│  │                     │            │  │  - State Encoder       │  │        │
+│  └─────────────────────┘            │  │  - MLP Encoder         │  │        │
+│                                     │  └────────────────────────┘  │        │
+│                                     │             OR                │        │
 │                                     │  ┌────────────────────────┐  │        │
-│                                     │  │   State Grid Encoder   │  │        │
-│                                     │  │   (15, 32, 18) tensor  │  │        │
+│                                     │  │  Pixel Mode (--pixels) │  │        │
+│                                     │  │  - Resize to (H,W,3)   │  │        │
+│                                     │  │  - CNN Encoder         │  │        │
 │                                     │  └────────────────────────┘  │        │
 │                                     │             │                 │        │
 │                                     │             ▼                 │        │
 │                                     │  ┌────────────────────────┐  │        │
-│                                     │  │   Dreamer Training     │  │        │
+│                                     │  │   DreamerV3 Training   │  │        │
 │                                     │  │   - RSSM World Model   │  │        │
 │                                     │  │   - Actor-Critic       │  │        │
+│                                     │  │   - JAX/Ninjax         │  │        │
 │                                     │  └────────────────────────┘  │        │
 │                                     └──────────────────────────────┘        │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -49,19 +51,36 @@ Based on [KataCR](https://github.com/wty-yy/KataCR) perception and the paper ["K
 
 ### Observation Space
 
+The agent supports two observation modes:
+
+**Mode 1: State Grid (default)** - KataCR perception extracts game state
 ```
-State Grid: (15, 32, 18) spatial tensor
-├── Channels 0-9:   Unit category one-hot encoding
-├── Channel 10-11:  Enemy/Friendly flag
-├── Channel 12:     Unit health (normalized)
-├── Channel 13:     Elixir (0-10 normalized)
-└── Channel 14:     Game time (normalized)
+State Grid: (15, 32, 18) spatial tensor, flattened to (8640,) for MLP
+├── Channel 0:   Friendly ground units (count per cell)
+├── Channel 1:   Friendly air units
+├── Channel 2:   Enemy ground units
+├── Channel 3:   Enemy air units
+├── Channel 4:   Friendly spells
+├── Channel 5:   Enemy spells
+├── Channel 6:   Friendly structures (HP ratio)
+├── Channel 7:   Enemy structures (HP ratio)
+├── Channel 8:   Elixir (0-10 normalized, broadcast)
+├── Channel 9:   Game time (0-360s normalized, broadcast)
+├── Channel 10:  Next card in queue (card index normalized)
+└── Channels 11-14: Current hand cards 1-4 (card index normalized)
+```
+
+**Mode 2: Pixel (--pixels)** - Raw RGB frames for CNN encoder
+```
+Pixel Observation: (H, W, 3) uint8 RGB, default (192, 256, 3)
+- Resized emulator frame (channels-last for DreamerV3 CNN encoder)
+- No KataCR perception required on training server
 ```
 
 ### Action Space
 
-Discrete action space with 324 actions:
-- 4 cards × 81 grid positions (9×9 deployment grid)
+Discrete action space with **37 actions**:
+- 1 no-op + 4 cards × 9 deploy cells (3×3 grid on friendly side)
 
 ---
 
@@ -202,6 +221,8 @@ clash-royale-mbrl/
 
 ## Training Flow
 
+### State Grid Mode (default)
+
 1. **Machine B** captures BGR frame from Android emulator
 2. **Machine B** sends frame via gRPC to Machine A
 3. **Machine A** runs KataCR perception:
@@ -209,10 +230,26 @@ clash-royale-mbrl/
    - CardClassifier (JAX) identifies hand cards
    - PaddleOCR reads game time
 4. **Machine A** encodes state into (15, 32, 18) grid
-5. **Machine A** feeds grid to Dreamer, gets action
+5. **Machine A** feeds grid to Dreamer MLP encoder, gets action
 6. **Machine A** returns action via gRPC response
 7. **Machine B** executes tap on emulator
 8. Repeat until match ends (detected by OK button color)
+
+### Pixel Mode (--pixels)
+
+1. **Machine B** captures BGR frame from Android emulator
+2. **Machine B** sends frame via gRPC to Machine A
+3. **Machine A** runs KataCR perception for **reward calculation** (tower HP tracking)
+4. **Machine A** resizes frame to (H, W, 3) RGB for **observation**
+5. **Machine A** feeds pixels to Dreamer CNN encoder, gets action
+6. **Machine A** returns action via gRPC response
+7. **Machine B** executes tap on emulator
+
+> **Note:** Pixel mode differences:
+> - **Observation:** Raw RGB pixels (learned visual features via CNN)
+> - **Rewards:** Still computed via KataCR perception (tower HP, enemy elimination)
+> - **Action masking:** Still uses cards/elixir info from perception
+> - **Higher compute:** CNN encoder + perception pipeline both run
 
 ---
 

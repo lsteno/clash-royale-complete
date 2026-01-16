@@ -40,12 +40,14 @@ class Agent(embodied.jax.Agent):
     dec_space = {k: v for k, v in obs_space.items() if k not in exclude}
     self.enc = {
         'simple': rssm.Encoder,
+      'cnn': rssm.Encoder,
     }[config.enc.typ](enc_space, **config.enc[config.enc.typ], name='enc')
     self.dyn = {
         'rssm': rssm.RSSM,
     }[config.dyn.typ](act_space, **config.dyn[config.dyn.typ], name='dyn')
     self.dec = {
         'simple': rssm.Decoder,
+      'cnn': rssm.Decoder,
     }[config.dec.typ](dec_space, **config.dec[config.dec.typ], name='dec')
 
     self.feat2tensor = lambda x: jnp.concatenate([

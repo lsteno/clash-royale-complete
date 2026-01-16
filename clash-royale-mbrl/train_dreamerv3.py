@@ -65,6 +65,11 @@ from src.specs import ACTION_SPEC, OBS_SPEC
 CLASH_ROYALE_CONFIG = {
     # Task identifier
     'task': 'clash_royale',
+
+    # Optional pixel-mode overrides (defaults for CLI toggles)
+    'pixels': False,
+    'pixel_height': 192,
+    'pixel_width': 256,
     
     # Use smaller batch for single-env training
     'batch_size': 8,
@@ -142,8 +147,8 @@ class TrainConfig:
     save_perception_crops: bool = False
     seed: int = 0
     pixels: bool = False  # If True, train directly from emulator RGB frames (no encoder)
-    pixel_height: int = 180
-    pixel_width: int = 320
+    pixel_height: int = 192
+    pixel_width: int = 256
     
     # Override specific settings
     steps: Optional[int] = None
@@ -234,8 +239,8 @@ def load_config(train_cfg: TrainConfig, remaining_args: list[str]) -> elements.C
     # Parse any remaining command-line flags as config overrides
     if remaining_args:
         config = elements.Flags(config).parse(remaining_args)
-    
-    # If pixel observations are requested, switch encoder/decoder to CNN
+
+    # If pixel observations are requested, switch encoder/decoder to CNN mode
     if train_cfg.pixels:
         config = config.update({
             'agent.enc.typ': 'cnn',
@@ -260,16 +265,21 @@ def make_agent(config: elements.Config, bridge: RemoteBridgeV3):
     # Create a temporary env to get obs/act spaces
     obs_shape_override = None
     flatten_obs = True
+    obs_dtype = np.float32
     if getattr(config, 'pixels', False):
-        # Use channels-last RGB observations when pixel training
-        obs_shape_override = (
-            int(getattr(config, 'pixel_height', 180)),
-            int(getattr(config, 'pixel_width', 320)),
-            3,
-        )
+        # Use channels-last uint8 images for CNN encoder
+        height = int(getattr(config, 'pixel_height', 180))
+        width = int(getattr(config, 'pixel_width', 320))
+        obs_shape_override = (height, width, 3)
         flatten_obs = False
+        obs_dtype = np.uint8
 
-    env = ClashRoyaleEmbodiedEnv(bridge, flatten_obs=flatten_obs, obs_shape_override=obs_shape_override)
+    env = ClashRoyaleEmbodiedEnv(
+        bridge,
+        flatten_obs=flatten_obs,
+        obs_shape_override=obs_shape_override,
+        obs_dtype=obs_dtype,
+    )
     
     # Filter spaces for agent
     notlog = lambda k: not k.startswith('log/')
@@ -304,21 +314,22 @@ def make_env(config: elements.Config, bridge: RemoteBridgeV3, index: int = 0):
     """Create the Clash Royale environment."""
     obs_shape_override = None
     flatten_obs = True  # Default: flattened state grid
+    obs_dtype = np.float32
 
     if getattr(config, 'pixels', False):
-        # Channels-last RGB from emulator for pixel-based training
-        obs_shape_override = (
-            int(getattr(config, 'pixel_height', 180)),
-            int(getattr(config, 'pixel_width', 320)),
-            3,
-        )
+        # Use channels-last uint8 images for CNN encoder
+        height = int(getattr(config, 'pixel_height', 180))
+        width = int(getattr(config, 'pixel_width', 320))
+        obs_shape_override = (height, width, 3)
         flatten_obs = False
+        obs_dtype = np.uint8
 
     env = ClashRoyaleEmbodiedEnv(
         bridge=bridge,
         step_timeout=config.run.episode_timeout,
         flatten_obs=flatten_obs,
         obs_shape_override=obs_shape_override,
+        obs_dtype=obs_dtype,
     )
     # Apply standard wrappers
     env = wrap_env(env, config)
@@ -419,10 +430,12 @@ def start_grpc_server(
     """Start the gRPC FrameService in a background thread."""
     from cr.rpc.v1.processor import FrameServiceProcessor, ProcessorConfig
     from cr.rpc.v1.server import RpcServerConfig, serve_forever
-    from src.perception.katacr_pipeline import KataCRVisionConfig
     
     def _run_server():
         proc_cfg = ProcessorConfig()
+        # Always configure perception - needed for reward calculation even in pixel mode
+        from src.perception.katacr_pipeline import KataCRVisionConfig
+
         vision_cfg = KataCRVisionConfig(
             debug_save_parts=train_cfg.save_perception_crops,
             debug_parts_dir=Path(config.logdir) / "perception_crops",
@@ -483,6 +496,12 @@ def main() -> None:
     
     # Start gRPC server
     _server_thread = start_grpc_server(bridge, train_cfg, config)
+
+    # Wait for remote client to connect before training
+    print("[train_dreamerv3] Waiting for remote client to send frames...")
+    while not bridge.wait_for_connection(timeout=10.0):
+        print("[train_dreamerv3] Still waiting for remote client...")
+    print("[train_dreamerv3] Remote client detected. Starting training.")
     
     # Create training components using DreamerV3's patterns
     args = elements.Config(

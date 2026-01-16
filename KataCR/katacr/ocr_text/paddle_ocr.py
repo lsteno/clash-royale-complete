@@ -7,13 +7,29 @@
 @Blog    : https://wty-yy.xyz/
 @Desc    : Based on Paddle OCR
 '''
-import cv2
-from paddleocr import PaddleOCR
-from paddleocr.tools.infer.predict_system import TextSystem
-import numpy as np
+import builtins
 import os
 import sys
 from pathlib import Path
+
+# NOTE: PaddleOCR 2.7.x has a bug where predict_system isn't imported before
+# being used in the PaddleOCR class definition. We must inject predict_system
+# into builtins BEFORE importing paddleocr to fix NameError.
+from paddleocr.tools.infer import predict_system as _predict_system
+from paddleocr.tools.infer.predict_system import TextSystem
+
+if getattr(builtins, "predict_system", None) is None:
+  builtins.predict_system = _predict_system
+
+# Now safe to import PaddleOCR
+from paddleocr import PaddleOCR
+
+# Cleanup builtins after successful import
+if getattr(builtins, "predict_system", None) is _predict_system:
+  del builtins.predict_system
+
+import cv2
+import numpy as np
 from katacr.build_dataset.constant import text_features_episode_end
 root_path = Path(__file__).parents[2]
 

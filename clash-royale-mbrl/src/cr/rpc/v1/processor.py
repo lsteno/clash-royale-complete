@@ -7,16 +7,18 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Callable, Optional, Sequence, Tuple
+from typing import Callable, Optional, Sequence, Tuple, TYPE_CHECKING
 
 import numpy as np
 import cv2
 
 from cr.rpc.v1 import frame_service_pb2 as pb2
-from src.environment.online_env import StateTensorEncoder
-from src.perception.katacr_pipeline import KataCRPerceptionEngine, KataCRVisionConfig
+from src.environment.state_encoder import StateTensorEncoder
 from src.specs import OBS_SPEC
 from src.environment.embodied_env import RemoteBridgeV3
+
+if TYPE_CHECKING:
+    from src.perception.katacr_pipeline import KataCRPerceptionEngine, KataCRVisionConfig
 
 ActionFn = Callable[[np.ndarray, dict, float, dict], Optional[pb2.Action]]
 
@@ -36,15 +38,19 @@ class FrameServiceProcessor:
     def __init__(
         self,
         cfg: ProcessorConfig = ProcessorConfig(),
-        vision_cfg: Optional[KataCRVisionConfig] = None,
+        vision_cfg: Optional["KataCRVisionConfig"] = None,
         action_fn: Optional[ActionFn] = None,
         bridge: Optional[RemoteBridgeV3] = None,
         use_pixels: bool = False,
-        pixel_height: int = 180,
-        pixel_width: int = 320,
+        pixel_height: int = 192,
+        pixel_width: int = 256,
     ):
         self._cfg = cfg
-        self._perception = KataCRPerceptionEngine(vision_cfg)
+        # Always run perception for reward calculation (tower HP tracking)
+        # Even in pixel mode, we need KataCR to compute dense rewards
+        from src.perception.katacr_pipeline import KataCRPerceptionEngine
+
+        self._perception: "KataCRPerceptionEngine" = KataCRPerceptionEngine(vision_cfg)
         self._encoder = StateTensorEncoder(cfg.max_game_seconds)
         self._action_fn = action_fn
         self._bridge = bridge
@@ -57,8 +63,9 @@ class FrameServiceProcessor:
         t0 = time.time()
         frame_bgr = self._decode_frame(request)
 
-        # Run perception (KataCR)
+        # Always run perception for reward calculation (tower HP tracking)
         perception_result = self._perception.process(frame_bgr, deploy_cards=None)
+        info = perception_result.info
 
         # Detect end-of-match via UI color probe on the received frame.
         match_over = _detect_match_over(frame_bgr)
@@ -77,9 +84,11 @@ class FrameServiceProcessor:
 
         # Encode observation: grid (default) or raw pixels (optional)
         if self._use_pixels:
-            # Resize to requested spatial dimensions and normalize to 0-1 float32
+            # Resize to requested spatial dimensions and convert BGR->RGB for CNN encoder
             resized = self._resize_frame(frame_bgr, self._pixel_width, self._pixel_height)
-            obs = resized.astype(np.float32) / 255.0
+            # Convert BGR to RGB (DreamerV3 CNN expects RGB channels-last)
+            obs = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).astype(np.uint8)
+            # obs shape is (H, W, 3) - channels-last for DreamerV3 CNN
         else:
             obs = self._encoder.encode(
                 perception_result.state,
@@ -88,8 +97,9 @@ class FrameServiceProcessor:
             )
 
         # Build state grid message
+        # Note: For pixels, obs is (H, W, 3) channels-last; for grid, obs is (C, H, W) channels-first
         if self._use_pixels:
-            c, h, w = 3, self._pixel_height, self._pixel_width
+            h, w, c = self._pixel_height, self._pixel_width, 3
         else:
             c, h, w = int(obs.shape[0]), int(obs.shape[1]), int(obs.shape[2])
 
@@ -97,11 +107,12 @@ class FrameServiceProcessor:
             channels=int(c),
             height=int(h),
             width=int(w),
-            dtype="float32",
+            dtype="uint8" if self._use_pixels else "float32",
         )
         state_grid.values.extend(obs.astype(np.float32).ravel().tolist())
 
         latency_ms = (time.time() - t0) * 1000.0
+        # Reward is always computed from perception (even in pixel mode)
         reward_value = float(perception_result.reward if perception_result.reward is not None else 0.0)
         done_value = bool(match_over)
         
@@ -117,12 +128,17 @@ class FrameServiceProcessor:
         if request.want_action:
             if self._bridge is not None:
                 # Hand the observation to the local trainer and wait for its action.
-                act_tuple = self._bridge.publish(obs, reward_value, done_value, perception_result.info)
+                act_tuple = self._bridge.publish(obs, reward_value, done_value, info)
                 if act_tuple is not None:
                     print(f"[processor] bridge action={act_tuple}")
                     action_msg = pb2.Action(card_idx=int(act_tuple[0]), grid_x=int(act_tuple[1]), grid_y=int(act_tuple[2]))
             elif self._action_fn is not None:
-                act = self._action_fn(obs, perception_result.state, perception_result.reward, perception_result.info)
+                act = self._action_fn(
+                    obs,
+                    perception_result.state,
+                    reward_value,
+                    info,
+                )
                 if act is not None:
                     print(f"[processor] action_fn returned {act}")
                     action_msg = act
@@ -134,7 +150,7 @@ class FrameServiceProcessor:
             reward=reward_value,
             done=done_value,
             latency_ms=latency_ms,
-            ocr_failed=bool(perception_result.info.get("ocr_time_failed", False)),
+            ocr_failed=bool(info.get("ocr_time_failed", False)),
             model_version=self._cfg.model_version,
             schema_version=self._cfg.schema_version,
         )
@@ -146,7 +162,7 @@ class FrameServiceProcessor:
         resp.info_str.update({
             "color_model": request.format.color_model or "BGR",
         })
-        if perception_result.info.get("elixir_failed"):
+        if info.get("elixir_failed"):
             resp.info_str["elixir_status"] = "ocr_failed"
         resp.info_num.update({
             "server_ms": latency_ms,

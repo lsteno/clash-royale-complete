@@ -91,6 +91,7 @@ class RemoteBridgeV3:
         self._steps: "queue.Queue[RemoteStepV3]" = queue.Queue()
         self._action_timeout = action_timeout
         self._ready = threading.Event()
+        self._connected = threading.Event()
         self._episode_count = 0
         self._step_count = 0
 
@@ -101,6 +102,10 @@ class RemoteBridgeV3:
     def is_ready(self) -> bool:
         """Check if the trainer is ready."""
         return self._ready.is_set()
+
+    def wait_for_connection(self, timeout: Optional[float] = None) -> bool:
+        """Block until the remote client sends at least one frame."""
+        return self._connected.wait(timeout=timeout)
 
     def publish(
         self,
@@ -114,7 +119,9 @@ class RemoteBridgeV3:
         Called by the gRPC processor when a new frame arrives from Machine B.
         
         Args:
-            obs: State tensor of shape (C, H, W)
+            obs: State tensor. Shape depends on mode:
+                 - State grid mode: (C, H, W) float32 channels-first
+                 - Pixel mode: (H, W, 3) uint8 channels-last RGB
             reward: Reward signal from the game
             done: Whether the episode has ended
             info: Additional info dict (cards, elixir, time, etc.)
@@ -122,6 +129,7 @@ class RemoteBridgeV3:
         Returns:
             The action tuple (card_slot, grid_x, grid_y) or None for no-op.
         """
+        self._connected.set()
         # If trainer isn't ready yet, return no-op immediately
         if not self._ready.is_set():
             return None
@@ -200,6 +208,7 @@ class ClashRoyaleEmbodiedEnv(embodied.Env):
         step_timeout: float = 60.0,
         flatten_obs: bool = True,
         obs_shape_override: Optional[tuple[int, ...]] = None,
+        obs_dtype: np.dtype = np.float32,
     ):
         """Initialize the environment.
         
@@ -214,6 +223,9 @@ class ClashRoyaleEmbodiedEnv(embodied.Env):
         self._flatten_obs = flatten_obs
         self._mapper = ActionMapper(DEFAULT_DEPLOY_CELLS)
         
+        # Observation dtype
+        self._obs_dtype = np.dtype(obs_dtype)
+
         # Episode state
         self._current_step: Optional[RemoteStepV3] = None
         self._episode_return = 0.0
@@ -237,7 +249,7 @@ class ClashRoyaleEmbodiedEnv(embodied.Env):
         """
         spaces = {
             # Main observation - flattened state vector or spatial tensor
-            'state': elements.Space(np.float32, self._obs_shape),
+            'state': elements.Space(self._obs_dtype, self._obs_shape),
             # Action mask: additive logits (0.0 = legal, -1e9 = illegal)
             'action_mask': elements.Space(np.float32, (ACTION_SPEC.size,)),
             # Required by DreamerV3
@@ -389,9 +401,14 @@ class ClashRoyaleEmbodiedEnv(embodied.Env):
             state = np.zeros(self._obs_shape, dtype=np.float32)
             action_mask = np.zeros(ACTION_SPEC.size, dtype=np.float32)
         else:
-            state = self._current_step.obs.astype(np.float32)
+            state = self._current_step.obs
             if self._flatten_obs:
                 state = state.reshape(-1)
+            if state.dtype != self._obs_dtype:
+                if self._obs_dtype == np.uint8:
+                    state = np.clip(state, 0, 255).astype(np.uint8)
+                else:
+                    state = state.astype(self._obs_dtype)
             # Compute action mask from current step info
             action_mask = self._compute_action_mask()
         
@@ -410,6 +427,10 @@ class ClashRoyaleEmbodiedEnv(embodied.Env):
         Returns:
             Action mask of shape (action_size,) with 0.0 for legal actions
             and -1e9 for illegal actions. This is an additive mask for logits.
+            
+        Note: In pixel mode (no KataCR perception), cards/elixir info is
+        unavailable. In that case, returns all-zeros (no masking) to allow
+        the agent to learn action validity from experience.
         """
         if self._current_step is None:
             return np.zeros(ACTION_SPEC.size, dtype=np.float32)
@@ -420,6 +441,12 @@ class ClashRoyaleEmbodiedEnv(embodied.Env):
             
         cards = info.get("cards")
         elixir = info.get("elixir", 0)
+        
+        # If cards info is empty/missing (e.g., pixel mode), disable masking
+        # to let the agent learn action validity from experience
+        if not cards or len(cards) == 0:
+            return np.zeros(ACTION_SPEC.size, dtype=np.float32)
+            
         mask = compute_action_mask(cards, elixir)
         return mask.astype(np.float32)
 
