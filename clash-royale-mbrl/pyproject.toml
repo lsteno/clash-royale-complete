@@ -22,6 +22,7 @@ dependencies = [
     "torch>=2.0.0",
     "torchvision>=0.15.0",
     "jax>=0.4.26",
+    "optax>=0.2.3",
     "elements>=3.19.1",
     "portal>=3.5.0",
     "ninjax>=3.5.1",

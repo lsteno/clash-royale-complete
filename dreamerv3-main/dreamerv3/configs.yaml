@@ -207,7 +207,7 @@ multicpu:
   jax.train_devices: [2, 3, 4, 5, 6, 7]
 
 clash_royale:
-  <<: *size12m
+  <<: *size200m
   task: clash_royale
   batch_size: 16
   batch_length: 32

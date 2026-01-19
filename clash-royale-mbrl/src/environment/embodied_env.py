@@ -508,6 +508,9 @@ class MaskedAgent:
     The mask is expected in obs['action_mask'] as additive logits
     (0.0 = legal, -1e9 = illegal).
     
+    The masking is done in NumPy after the JAX policy returns to avoid
+    host-to-device transfer issues in JIT-compiled code.
+    
     Usage:
         agent = Agent(obs_space, act_space, config)
         masked_agent = MaskedAgent(agent, action_key='action')
@@ -533,74 +536,52 @@ class MaskedAgent:
         This method:
         1. Calls the underlying agent's policy
         2. Extracts the action mask from observations
-        3. Re-samples actions with the mask applied to logits
-        
-        Note: This implementation works by modifying the sampled action
-        after the fact using the mask. For full integration, the mask
-        should be applied before sampling in the agent's policy head.
+        3. Re-samples illegal actions in NumPy (outside JAX JIT)
         """
-        import jax
-        import jax.numpy as jnp
-        import ninjax as nj
-        
-        # Get the action mask from observations
+        # Get the action mask from observations before calling policy
         action_mask = obs.get('action_mask')
         
-        # Call underlying policy
+        # Call underlying policy (this is JIT-compiled by JAX)
         carry, act, out = self._agent.policy(carry, obs, mode)
         
         if action_mask is None:
             return carry, act, out
         
-        # Apply mask to the action by re-sampling with masked logits
-        # We need to get the policy distribution and apply the mask
-        # For now, we'll use a simpler approach: if the sampled action
-        # is illegal, sample from legal actions only
-        
+        # Apply mask in NumPy (outside JAX) to avoid host-to-device issues
         if self._action_key in act:
-            sampled_action = act[self._action_key]
+            # Convert to NumPy for masking
+            sampled_action = np.asarray(act[self._action_key])
+            mask = np.asarray(action_mask)
             
-            # Check if sampled action is legal (mask value is 0.0 for legal)
-            # action_mask shape: (batch, action_size) or (action_size,)
-            mask = jnp.asarray(action_mask)
-            
-            # If mask has batch dimension, index into it
+            # Check if sampled action is legal (mask value is 0.0 for legal, very negative for illegal)
             if mask.ndim == 2:
-                # Gather the mask value for the sampled action
-                batch_indices = jnp.arange(sampled_action.shape[0])
+                # Batch case: gather mask values for each sampled action
+                batch_indices = np.arange(mask.shape[0])
                 mask_values = mask[batch_indices, sampled_action]
             else:
                 mask_values = mask[sampled_action]
             
-            # If action is illegal (mask < -1e8), resample from legal actions
-            is_illegal = mask_values < -1e8
+            # If action is illegal (mask < 0), resample from legal actions
+            is_illegal = mask_values < 0
             
-            if jnp.any(is_illegal):
-                # Create uniform distribution over legal actions
-                legal_mask = mask >= -1e8  # True for legal actions
-                
-                # Sample uniformly from legal actions where current is illegal
+            if np.any(is_illegal):
+                # Resample illegal actions uniformly from legal actions
                 if mask.ndim == 2:
-                    # Batch case
-                    def resample_one(args):
-                        illegal, legal, old_action = args
-                        legal_indices = jnp.where(legal, size=legal.shape[0])[0]
-                        num_legal = jnp.sum(legal)
-                        new_idx = jax.random.randint(
-                            nj.seed(), (), 0, jnp.maximum(num_legal, 1))
-                        new_action = legal_indices[new_idx]
-                        return jnp.where(illegal, new_action, old_action)
-                    
-                    new_actions = jax.vmap(resample_one)(
-                        (is_illegal, legal_mask, sampled_action))
+                    new_actions = sampled_action.copy()
+                    for i in range(mask.shape[0]):
+                        if is_illegal[i]:
+                            legal_indices = np.where(mask[i] >= 0)[0]
+                            if len(legal_indices) > 0:
+                                new_actions[i] = np.random.choice(legal_indices)
                 else:
-                    # Single case
-                    legal_indices = jnp.where(legal_mask, size=mask.shape[0])[0]
-                    num_legal = jnp.sum(legal_mask)
-                    new_idx = jax.random.randint(
-                        nj.seed(), (), 0, jnp.maximum(num_legal, 1))
-                    new_action = legal_indices[new_idx]
-                    new_actions = jnp.where(is_illegal, new_action, sampled_action)
+                    if is_illegal:
+                        legal_indices = np.where(mask >= 0)[0]
+                        if len(legal_indices) > 0:
+                            new_actions = np.random.choice(legal_indices)
+                        else:
+                            new_actions = sampled_action
+                    else:
+                        new_actions = sampled_action
                 
                 act = {**act, self._action_key: new_actions}
         

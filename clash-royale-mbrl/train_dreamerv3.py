@@ -38,6 +38,14 @@ if str(DREAMERV3_ROOT) not in sys.path:
 if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
+# Ensure XLA can fall back to lower-memory conv algorithms if autotuning OOMs.
+# Only set if user hasn't specified XLA_FLAGS.
+_xla_flag = "--xla_gpu_strict_conv_algorithm_picker=false"
+if "XLA_FLAGS" not in os.environ:
+    os.environ["XLA_FLAGS"] = _xla_flag
+elif _xla_flag not in os.environ["XLA_FLAGS"]:
+    os.environ["XLA_FLAGS"] = f"{os.environ['XLA_FLAGS']} {_xla_flag}"
+
 # Import JAX first to ensure proper CUDA initialization
 import jax
 _jax_devices = jax.devices()
@@ -120,14 +128,14 @@ CLASH_ROYALE_CONFIG = {
                 'units': 512,
             },
         },
-        # Smaller RSSM for faster iteration
+        # RSSM sized ~50M parameter preset
         'dyn': {
             'typ': 'rssm',
             'rssm': {
-                'deter': 2048,
-                'hidden': 256,
+                'deter': 4096,
+                'hidden': 512,
                 'stoch': 32,
-                'classes': 16,
+                'classes': 32,
             },
         },
         # Imagination horizon
@@ -436,9 +444,18 @@ def start_grpc_server(
         # Always configure perception - needed for reward calculation even in pixel mode
         from src.perception.katacr_pipeline import KataCRVisionConfig
 
+        ocr_gpu = False
+        try:
+            import torch
+
+            ocr_gpu = bool(torch.cuda.is_available())
+        except Exception:
+            ocr_gpu = False
+
         vision_cfg = KataCRVisionConfig(
             debug_save_parts=train_cfg.save_perception_crops,
             debug_parts_dir=Path(config.logdir) / "perception_crops",
+            ocr_gpu=ocr_gpu,
         )
         processor = FrameServiceProcessor(
             proc_cfg,
@@ -497,11 +514,18 @@ def main() -> None:
     # Start gRPC server
     _server_thread = start_grpc_server(bridge, train_cfg, config)
 
-    # Wait for remote client to connect before training
-    print("[train_dreamerv3] Waiting for remote client to send frames...")
-    while not bridge.wait_for_connection(timeout=10.0):
-        print("[train_dreamerv3] Still waiting for remote client...")
-    print("[train_dreamerv3] Remote client detected. Starting training.")
+    # Do not block on connection here: initialize training immediately.
+    # The training loop will start once the first frame arrives (env reset blocks
+    # until a frame is received), which keeps setup work off the critical path.
+    print("[train_dreamerv3] Starting setup. Training will begin after first frame.")
+
+    def _log_connection() -> None:
+        print("[train_dreamerv3] Waiting for remote client to send frames...")
+        while not bridge.wait_for_connection(timeout=10.0):
+            print("[train_dreamerv3] Still waiting for remote client...")
+        print("[train_dreamerv3] Remote client detected.")
+
+    threading.Thread(target=_log_connection, name="wait-for-client", daemon=True).start()
     
     # Create training components using DreamerV3's patterns
     args = elements.Config(
