@@ -26,10 +26,10 @@ from src.environment.emulator_env import ClashRoyaleEmulatorEnv, EmulatorConfig
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Send emulator frames to remote FrameService")
     parser.add_argument("--target", type=str, required=True, help="FrameService address host:port")
-    parser.add_argument("--deadline-ms", type=int, default=500, help="Per-RPC deadline in ms")
-    parser.add_argument("--max-inflight", type=int, default=2, help="Max in-flight RPCs")
+    parser.add_argument("--deadline-ms", type=int, default=50000, help="Per-RPC deadline in ms")
+    parser.add_argument("--max-inflight", type=int, default=1, help="Max in-flight RPCs")
     parser.add_argument("--want-action", action="store_true", help="Request action from server")
-    parser.add_argument("--fps", type=float, default=5.0, help="Capture/send rate")
+    parser.add_argument("--fps", type=float, default=2.0, help="Capture/send rate")
     parser.add_argument("--scrcpy-title", type=str, default="Android", help="scrcpy window title to capture")
     parser.add_argument("--capture-region", type=str, default=None, help="Override capture region as left,top,width,height (pixels)")
     parser.add_argument("--no-adb-fallback", action="store_true", help="Disable adb screencap fallback (fail if scrcpy capture fails)")
@@ -137,6 +137,12 @@ async def main_async(args: argparse.Namespace) -> None:
                 )
             except Exception as exc:  # network or deadline
                 print(f"RPC failed for frame {frame_id}: {exc}")
+                await asyncio.sleep(interval)
+                frame_id += 1
+                continue
+
+            if resp is None:
+                print(f"RPC returned no response for frame {frame_id}")
                 await asyncio.sleep(interval)
                 frame_id += 1
                 continue
