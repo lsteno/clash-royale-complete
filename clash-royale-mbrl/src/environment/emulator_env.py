@@ -302,15 +302,15 @@ class ClashRoyaleEmulatorEnv:
         # Screen regions (normalized 0-1)
         self.arena_region = {
             "top": 0.15,      # Start after top bar
-            "bottom": 0.75,   # End before cards
+            "bottom": 0.7292, # End before cards (~1750px on 2400px height)
             "left": 0.0,
             "right": 1.0
         }
         self.cards_region = {
-            "top": 0.82,
+            "top": 0.8833,
             "bottom": 0.95,
-            "left": 0.15,
-            "right": 0.85
+            "left": 0.2315,
+            "right": 0.9722
         }
         
     def get_observation(self) -> np.ndarray:

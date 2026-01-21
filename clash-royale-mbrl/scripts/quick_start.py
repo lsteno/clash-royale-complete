@@ -43,9 +43,9 @@ COORDS = {
     "king_tower_front": (540, 1440),       # In front of king tower
     "left_princess": (270, 1560),          # Left princess tower area
     "right_princess": (810, 1560),         # Right princess tower area
-    "back_left": (200, 1800),              # Back left
-    "back_right": (880, 1800),             # Back right
-    "back_center": (540, 1800),            # Back center
+    "back_left": (200, 1750),              # Back left
+    "back_right": (880, 1750),             # Back right
+    "back_center": (540, 1750),            # Back center
     
     # Post-game
     "ok_button": (540, 1940),              # OK button after game
