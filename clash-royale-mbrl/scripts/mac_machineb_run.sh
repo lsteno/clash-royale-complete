@@ -115,12 +115,16 @@ if _port_in_use "${LOCAL_PORT}"; then
     fi
     exit 2
   fi
+  BUSY_PORT="${LOCAL_PORT}"
   for p in $(seq 50051 50150); do
     if ! _port_in_use "${p}"; then
       LOCAL_PORT="${p}"
       break
     fi
   done
+  if [[ "${LOCAL_PORT}" != "${BUSY_PORT}" ]]; then
+    echo "[mac_machineb_run] Local port ${BUSY_PORT} is in use; using ${LOCAL_PORT} instead."
+  fi
 fi
 
 echo "[mac_machineb_run] Opening SSH tunnel localhost:${LOCAL_PORT} -> ${VM} 127.0.0.1:${VM_PORT}"
