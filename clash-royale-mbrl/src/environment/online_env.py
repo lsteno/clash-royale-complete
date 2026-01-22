@@ -32,8 +32,11 @@ from src.environment.emulator_env import ClashRoyaleKataCREnv, EmulatorConfig
 from src.perception.katacr_pipeline import KataCRVisionConfig
 from src.specs import ACTION_SPEC, OBS_SPEC
 
-_UNIT_FRIENDLY = 1
-_UNIT_ENEMY = 0
+# KataCR uses `bel` (belonging) as a side indicator. In the upstream codebase,
+# `bel == 0` corresponds to the bottom player (friendly from our perspective)
+# and `bel == 1` to the top player (enemy).
+_UNIT_FRIENDLY = 0
+_UNIT_ENEMY = 1
 
 _GROUND = set(ground_unit_list)
 _FLYING = set(flying_unit_list)
@@ -78,6 +81,21 @@ DEFAULT_DEPLOY_CELLS: Tuple[DeployCell, ...] = (
     DeployCell(14, 26),
 )
 
+DEFAULT_SPELL_CELLS: Tuple[DeployCell, ...] = (
+    # Top (enemy) half: approximate tower/behind-tower targets.
+    DeployCell(4, 6),
+    DeployCell(9, 6),
+    DeployCell(14, 6),
+    # River line / mid: common engagement locations.
+    DeployCell(4, 14),
+    DeployCell(9, 14),
+    DeployCell(14, 14),
+    # Bottom (friendly) half: defensive spell placements.
+    DeployCell(4, 22),
+    DeployCell(9, 22),
+    DeployCell(14, 22),
+)
+
 
 @dataclass
 class OnlineEnvConfig:
@@ -86,32 +104,61 @@ class OnlineEnvConfig:
     emulator: EmulatorConfig = field(default_factory=EmulatorConfig)
     vision: KataCRVisionConfig = field(default_factory=KataCRVisionConfig)
     deploy_cells: Sequence[DeployCell] = DEFAULT_DEPLOY_CELLS
+    spell_cells: Sequence[DeployCell] = DEFAULT_SPELL_CELLS
     max_game_seconds: int = 360
 
 
 class ActionMapper:
     """Translate discrete Dreamer actions to emulator taps."""
 
-    def __init__(self, deploy_cells: Sequence[DeployCell]):
+    def __init__(self, deploy_cells: Sequence[DeployCell], spell_cells: Sequence[DeployCell]):
         if len(deploy_cells) != ACTION_SPEC.cells_per_card:
             raise ValueError(
                 f"Expected {ACTION_SPEC.cells_per_card} deploy cells, got {len(deploy_cells)}"
             )
-        self._cells = list(deploy_cells)
+        if len(spell_cells) != ACTION_SPEC.cells_per_card:
+            raise ValueError(
+                f"Expected {ACTION_SPEC.cells_per_card} spell cells, got {len(spell_cells)}"
+            )
+        self._deploy_cells = list(deploy_cells)
+        self._spell_cells = list(spell_cells)
 
-    def decode(self, action_index: int) -> Optional[Tuple[int, int, int]]:
+    def decode(self, action_index: int, *, cards: Optional[Sequence] = None) -> Optional[Tuple[int, int, int]]:
         """Return (card_slot, grid_x, grid_y) or None for no-op."""
 
         if action_index == 0:
             return None
         action_index -= 1
-        card_slot = action_index // len(self._cells)
-        cell_idx = action_index % len(self._cells)
+        card_slot = action_index // len(self._deploy_cells)
+        cell_idx = action_index % len(self._deploy_cells)
         card_slot += 1  # emulator expects 1-4 for the current hand
         if card_slot > ACTION_SPEC.num_cards:
             return None
-        cell = self._cells[cell_idx]
+        cells = self._cells_for_slot(card_slot, cards)
+        cell = cells[cell_idx]
         return (card_slot, cell.grid_x, cell.grid_y)
+
+    def _cells_for_slot(self, card_slot: int, cards: Optional[Sequence]) -> List[DeployCell]:
+        if not cards or card_slot >= len(cards):
+            return self._deploy_cells
+        name = self._resolve_card_name(cards[card_slot])
+        if name is not None and name in _SPELL:
+            return self._spell_cells
+        return self._deploy_cells
+
+    @staticmethod
+    def _resolve_card_name(card) -> Optional[str]:
+        if card is None:
+            return None
+        if isinstance(card, str):
+            return card
+        try:
+            idx = int(card)
+        except Exception:
+            return None
+        if 0 <= idx < len(card_list):
+            return card_list[idx]
+        return None
 
 
 class StateTensorEncoder:
@@ -163,7 +210,7 @@ class StateTensorEncoder:
             grid[channel, gy, gx] = max(grid[channel, gy, gx], ratio)
 
     def _structure_hp_ratio(self, bel: int, name: str, xy, reward_builder) -> float:
-        bel_idx = 1 if bel == _UNIT_FRIENDLY else 0
+        bel_idx = 0 if bel == _UNIT_FRIENDLY else 1
         if name == "king-tower":
             hp = reward_builder.hp_king_tower[bel_idx]
             full = reward_builder.full_hp["king-tower"][bel_idx]
@@ -241,7 +288,7 @@ class ClashRoyaleDreamerEnv(Env):
         self._config = config
         self._base = ClashRoyaleKataCREnv(config.emulator, config.vision)
         self._encoder = StateTensorEncoder(config.max_game_seconds)
-        self._action_mapper = ActionMapper(config.deploy_cells)
+        self._action_mapper = ActionMapper(config.deploy_cells, config.spell_cells)
         self._obs_space = FloatBox(low=0.0, high=1.0, shape=OBS_SPEC.shape, dtype=np.float32)
         self._act_space = gym.spaces.Discrete(ACTION_SPEC.size)
         self.random = np.random.RandomState()
@@ -267,7 +314,7 @@ class ClashRoyaleDreamerEnv(Env):
         return obs
 
     def step(self, action):
-        decoded = self._action_mapper.decode(int(action))
+        decoded = self._action_mapper.decode(int(action), cards=self._latest_cards)
         if decoded is not None:
             card_slot, gx, gy = decoded
             self._attempt_deploy(*decoded)
@@ -278,6 +325,12 @@ class ClashRoyaleDreamerEnv(Env):
         done = self._is_terminal(result.info) or perception_terminal
         if done and hasattr(self._base, "mark_match_finished"):
             self._base.mark_match_finished()
+        if done and getattr(self._base, "katacr", None) is not None:
+            # Reset KataCR stateful trackers between matches to avoid reward/state drift.
+            try:
+                self._base.katacr.reset()
+            except Exception:
+                pass
         self._episode_return += reward
         self._episode_steps += 1
         discount = np.array(0.0 if done else 1.0, dtype=np.float32)
@@ -326,5 +379,8 @@ class ClashRoyaleDreamerEnv(Env):
         return False
 
     def _is_terminal(self, info: dict) -> bool:
-        # this didn't work well in practice
-        return False
+        # OCR center text flag: 1 indicates end-of-episode (victory/defeat).
+        try:
+            return bool(info.get("center_flag") == 1)
+        except Exception:
+            return False

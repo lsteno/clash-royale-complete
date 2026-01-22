@@ -38,6 +38,21 @@ DEFAULT_DEPLOY_CELLS: Tuple[DeployCell, ...] = (
     DeployCell(14, 26),
 )
 
+DEFAULT_SPELL_CELLS: Tuple[DeployCell, ...] = (
+    # Top (enemy) half: approximate tower/behind-tower targets.
+    DeployCell(4, 6),
+    DeployCell(9, 6),
+    DeployCell(14, 6),
+    # River line / mid: common engagement locations.
+    DeployCell(4, 14),
+    DeployCell(9, 14),
+    DeployCell(14, 14),
+    # Bottom (friendly) half: defensive spell placements.
+    DeployCell(4, 22),
+    DeployCell(9, 22),
+    DeployCell(14, 22),
+)
+
 
 class ActionMapper:
     """Translate discrete Dreamer actions to emulator tap commands.
@@ -52,7 +67,11 @@ class ActionMapper:
     Total: 37 actions = 1 no-op + 4 cards × 9 cells
     """
 
-    def __init__(self, deploy_cells: Sequence[DeployCell] = DEFAULT_DEPLOY_CELLS):
+    def __init__(
+        self,
+        deploy_cells: Sequence[DeployCell] = DEFAULT_DEPLOY_CELLS,
+        spell_cells: Sequence[DeployCell] = DEFAULT_SPELL_CELLS,
+    ):
         """Initialize the action mapper.
         
         Args:
@@ -63,9 +82,14 @@ class ActionMapper:
             raise ValueError(
                 f"Expected {ACTION_SPEC.cells_per_card} deploy cells, got {len(deploy_cells)}"
             )
-        self._cells = list(deploy_cells)
+        if len(spell_cells) != ACTION_SPEC.cells_per_card:
+            raise ValueError(
+                f"Expected {ACTION_SPEC.cells_per_card} spell cells, got {len(spell_cells)}"
+            )
+        self._deploy_cells = list(deploy_cells)
+        self._spell_cells = list(spell_cells)
 
-    def decode(self, action_index: int) -> Optional[Tuple[int, int, int]]:
+    def decode(self, action_index: int, *, cards: Optional[Sequence] = None) -> Optional[Tuple[int, int, int]]:
         """Decode a discrete action index to (card_slot, grid_x, grid_y).
         
         Args:
@@ -79,14 +103,15 @@ class ActionMapper:
             return None
             
         action_index -= 1
-        card_slot = action_index // len(self._cells)
-        cell_idx = action_index % len(self._cells)
+        card_slot = action_index // len(self._deploy_cells)
+        cell_idx = action_index % len(self._deploy_cells)
         card_slot += 1  # emulator expects 1-4 for the current hand
         
         if card_slot > ACTION_SPEC.num_cards:
             return None
             
-        cell = self._cells[cell_idx]
+        cells = self._cells_for_slot(card_slot, cards)
+        cell = cells[cell_idx]
         return (card_slot, cell.grid_x, cell.grid_y)
 
     def encode(self, card_slot: int, grid_x: int, grid_y: int) -> Optional[int]:
@@ -104,9 +129,9 @@ class ActionMapper:
             return None
             
         # Find matching cell
-        for cell_idx, cell in enumerate(self._cells):
+        for cell_idx, cell in enumerate(self._deploy_cells):
             if cell.grid_x == grid_x and cell.grid_y == grid_y:
-                return 1 + (card_slot - 1) * len(self._cells) + cell_idx
+                return 1 + (card_slot - 1) * len(self._deploy_cells) + cell_idx
                 
         return None
 
@@ -118,4 +143,45 @@ class ActionMapper:
     @property
     def cells(self) -> Tuple[DeployCell, ...]:
         """Return the deploy cells."""
-        return tuple(self._cells)
+        return tuple(self._deploy_cells)
+
+    def _cells_for_slot(self, card_slot: int, cards: Optional[Sequence]) -> list[DeployCell]:
+        if not cards or card_slot >= len(cards):
+            return self._deploy_cells
+        name = _resolve_card_name(cards[card_slot])
+        if name is not None and _is_spell(name):
+            return self._spell_cells
+        return self._deploy_cells
+
+
+_SPELL_NAMES: Optional[set[str]] = None
+
+
+def _is_spell(card_name: str) -> bool:
+    global _SPELL_NAMES
+    if _SPELL_NAMES is None:
+        try:
+            from katacr.constants.label_list import spell_unit_list  # type: ignore
+        except Exception:
+            _SPELL_NAMES = set()
+        else:
+            _SPELL_NAMES = set(spell_unit_list)
+    return card_name in _SPELL_NAMES
+
+
+def _resolve_card_name(card) -> Optional[str]:
+    if card is None:
+        return None
+    if isinstance(card, str):
+        return card
+    try:
+        idx = int(card)
+    except Exception:
+        return None
+    try:
+        from katacr.constants.card_list import card_list  # type: ignore
+    except Exception:
+        return None
+    if 0 <= idx < len(card_list):
+        return card_list[idx]
+    return None

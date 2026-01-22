@@ -441,6 +441,16 @@ class ClashRoyaleEmbodiedEnv(embodied.Env):
             
         cards = info.get("cards")
         elixir = info.get("elixir", 0)
+        # If elixir OCR is failing, be conservative: disallow all card plays.
+        # This prevents the agent from spamming expensive cards on menus or
+        # when the elixir value is stale/incorrect.
+        if bool(info.get("elixir_failed", False)):
+            elixir = -1
+        try:
+            if elixir is None or float(elixir) < 0:
+                elixir = -1
+        except Exception:
+            elixir = -1
         
         # If cards info is empty/missing (e.g., pixel mode), disable masking
         # to let the agent learn action validity from experience
@@ -461,7 +471,10 @@ class ClashRoyaleEmbodiedEnv(embodied.Env):
 
     def _decode_action(self, action_idx: int) -> Optional[Tuple[int, int, int]]:
         """Decode a discrete action index to (card_slot, grid_x, grid_y) tuple."""
-        decoded = self._mapper.decode(action_idx)
+        cards = None
+        if self._current_step is not None and isinstance(self._current_step.info, dict):
+            cards = self._current_step.info.get("cards")
+        decoded = self._mapper.decode(action_idx, cards=cards)
         if decoded is None:
             return None
         card_slot, gx, gy = decoded

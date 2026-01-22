@@ -22,8 +22,11 @@ from katacr.constants.label_list import (
 
 from src.specs import OBS_SPEC
 
-_UNIT_FRIENDLY = 1
-_UNIT_ENEMY = 0
+# KataCR uses `bel` (belonging) as a side indicator. In the upstream codebase,
+# `bel == 0` corresponds to the bottom player (friendly from our perspective)
+# and `bel == 1` to the top player (enemy).
+_UNIT_FRIENDLY = 0
+_UNIT_ENEMY = 1
 
 _GROUND = set(ground_unit_list)
 _FLYING = set(flying_unit_list)
@@ -46,6 +49,24 @@ CH_CARD_1 = 11
 CH_CARD_2 = 12
 CH_CARD_3 = 13
 CH_CARD_4 = 14
+
+CHANNEL_NAMES: Tuple[str, ...] = (
+    "friendly_ground",
+    "friendly_air",
+    "enemy_ground",
+    "enemy_air",
+    "friendly_spell",
+    "enemy_spell",
+    "friendly_struct_hp",
+    "enemy_struct_hp",
+    "elixir",
+    "time",
+    "next_card",
+    "card_1",
+    "card_2",
+    "card_3",
+    "card_4",
+)
 
 
 class StateTensorEncoder:
@@ -97,7 +118,7 @@ class StateTensorEncoder:
             grid[channel, gy, gx] = max(grid[channel, gy, gx], ratio)
 
     def _structure_hp_ratio(self, bel: int, name: str, xy, reward_builder) -> float:
-        bel_idx = 1 if bel == _UNIT_FRIENDLY else 0
+        bel_idx = 0 if bel == _UNIT_FRIENDLY else 1
         if name == "king-tower":
             hp = reward_builder.hp_king_tower[bel_idx]
             full = reward_builder.full_hp["king-tower"][bel_idx]

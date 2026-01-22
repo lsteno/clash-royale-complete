@@ -11,15 +11,12 @@ Legacy local training imports (require cv2):
     from src.environment.emulator_env import ClashRoyaleEmulatorEnv, EmulatorConfig
 """
 
-# DreamerV3 remote environment (lightweight dependencies)
-from .embodied_env import (
-    ClashRoyaleEmbodiedEnv,
-    RemoteBridgeV3,
-    RemoteStepV3,
-    make_clash_royale_env,
-    MaskedAgent,
-    make_masked_agent,
-)
+# Keep this package import-light.
+#
+# Importing `embodied_env` pulls in DreamerV3 dependencies (e.g. `elements`),
+# which are not required for perception-only services like the gRPC
+# FrameService. Downstream code should import from the specific module it
+# needs, e.g. `from src.environment.embodied_env import RemoteBridgeV3`.
 
 # Shared utilities (no heavy dependencies)
 from .action_utils import (

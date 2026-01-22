@@ -27,7 +27,7 @@ if str(KATACR_ROOT) not in sys.path:
 
 from katacr.build_dataset.constant import part3_elixir_params
 from katacr.build_dataset.utils.split_part import extract_bbox, process_part
-from katacr.classification.predict import CardClassifier
+from katacr.constants.card_list import card2idx as DEFAULT_CARD2IDX
 from katacr.ocr_text.paddle_ocr import OCR
 from katacr.policy.perceptron.reward_builder import RewardBuilder
 from katacr.policy.perceptron.state_builder import StateBuilder
@@ -39,21 +39,29 @@ class KataCRVisionConfig:
     """Configuration for the KataCR perception stack."""
 
     detector_paths: Optional[List[Path]] = None
+    detector_count: Optional[int] = None
     classifier_path: Optional[Path] = None
+    enable_card_classifier: bool = True
+    fallback_card_name: str = "skeletons"
     ocr_onnx: bool = False
     ocr_gpu: bool = True
     resize_width: int = 576   # KataCR canonical portrait width
     resize_height: int = 1280  # KataCR canonical portrait height
+    enable_center_ocr: bool = True
     debug_save_parts: bool = False
     debug_parts_dir: Path = Path("logs/vision_parts")
 
     def resolved_detectors(self) -> List[Path]:
         if self.detector_paths is not None:
-            return [Path(p) for p in self.detector_paths]
-        return [
-            KATACR_ROOT / "runs" / "detector1_v0.7.13" / "best.pt",
-            KATACR_ROOT / "runs" / "detector2_v0.7.13" / "best.pt",
-        ]
+            paths = [Path(p) for p in self.detector_paths]
+        else:
+            paths = [
+                KATACR_ROOT / "runs" / "detector1_v0.7.13" / "best.pt",
+                KATACR_ROOT / "runs" / "detector2_v0.7.13" / "best.pt",
+            ]
+        if self.detector_count is not None:
+            return paths[: max(1, int(self.detector_count))]
+        return paths
 
     def resolved_classifier(self) -> Path:
         if self.classifier_path is not None:
@@ -87,7 +95,13 @@ class VisualFusionAdapter:
 
         self.ocr = OCR(onnx=cfg.ocr_onnx, use_gpu=cfg.ocr_gpu, lang="en")
         self.yolo = ComboDetector(self.detectors)
-        self.classifier = CardClassifier(self.classifier_path)
+        self.classifier = None
+        if bool(getattr(cfg, "enable_card_classifier", True)):
+            # KataCR's card classifier uses JAX/Flax and may be unavailable on some
+            # machines. Keep it optional so the perception service can still run.
+            from katacr.classification.predict import CardClassifier
+
+            self.classifier = CardClassifier(self.classifier_path)
         self._last_time = 0
         self._last_capture_ts: Optional[float] = None
         self._last_elixir: Optional[int] = None
@@ -98,7 +112,7 @@ class VisualFusionAdapter:
             raise FileNotFoundError(
                 "KataCR detector weights missing: " + ", ".join(str(p) for p in missing)
             )
-        if not self.classifier_path.exists():
+        if bool(getattr(self.cfg, "enable_card_classifier", True)) and not self.classifier_path.exists():
             raise FileNotFoundError(
                 "KataCR card classifier weights missing. Download CardClassification-checkpoints "
                 "from the KataCR README link and place under KataCR/logs/."
@@ -130,7 +144,15 @@ class VisualFusionAdapter:
         self._last_time = min(time_val, self.MAX_GAME_TIME)
         self._last_capture_ts = now_ts
         arena = self.yolo.infer(parts[1], pil=False)
-        cards = self.classifier.process_part3(parts[2], pil=False)
+        if self.classifier is not None:
+            cards = self.classifier.process_part3(parts[2], pil=False)
+            card2idx = self.classifier.card2idx
+            idx2card = self.classifier.idx2card
+        else:
+            fallback = str(getattr(self.cfg, "fallback_card_name", "skeletons"))
+            cards = [fallback] * 5
+            card2idx = DEFAULT_CARD2IDX
+            idx2card = None
         elixir_raw = self.ocr.process_part3_elixir(parts[2], pil=False)
         elixir_fallback_used = False
         try:
@@ -145,8 +167,10 @@ class VisualFusionAdapter:
             else:
                 elixir = -1  # Still mark failure if we have no history
         
-        # Check for Victory/Defeat/Match Over texts in the center
-        center_flag = self.ocr.process_center_texts(frame_bgr, pil=False)
+        # Check for Victory/Defeat/Match Over texts in the center (optional).
+        center_flag = -1
+        if bool(getattr(self.cfg, "enable_center_ocr", True)):
+            center_flag = self.ocr.process_center_texts(frame_bgr, pil=False)
 
         return {
             "time": time_val,
@@ -158,8 +182,8 @@ class VisualFusionAdapter:
             "elixir_failed": elixir_failed,
             "elixir_fallback_used": elixir_fallback_used,
             "center_flag": center_flag,
-            "card2idx": self.classifier.card2idx,
-            "idx2card": self.classifier.idx2card,
+            "card2idx": card2idx,
+            "idx2card": idx2card,
             "parts_pos": parts_pos,
         }
 
@@ -242,4 +266,3 @@ class KataCRPerceptionEngine:
         state = self.state_builder.get_state()
         reward = self.reward_builder.get_reward()
         return KataCRPerceptionResult(state=state, reward=reward, info=info)
-

@@ -29,14 +29,20 @@ from typing import Optional
 CURRENT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = CURRENT_DIR.parent
 DREAMERV3_ROOT = REPO_ROOT / "dreamerv3-main"
+PROJECT_SRC = CURRENT_DIR / "src"
 
 # Ensure dreamerv3 and embodied are importable
 if str(DREAMERV3_ROOT) not in sys.path:
     sys.path.insert(0, str(DREAMERV3_ROOT))
 
-# Ensure project src is importable
+# Ensure project root is importable (enables `import src.*`)
 if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
+
+# Ensure `import cr.*` resolves to `clash-royale-mbrl/src/cr/*` when running this
+# file directly (i.e. without `pip install -e`).
+if str(PROJECT_SRC) not in sys.path:
+    sys.path.insert(0, str(PROJECT_SRC))
 
 # Ensure XLA can fall back to lower-memory conv algorithms if autotuning OOMs.
 # Only set if user hasn't specified XLA_FLAGS.
@@ -157,6 +163,15 @@ class TrainConfig:
     pixels: bool = False  # If True, train directly from emulator RGB frames (no encoder)
     pixel_height: int = 192
     pixel_width: int = 256
+    perception_stride: int = 1
+    return_state_grid: bool = False
+    detector_count: int = 2
+    disable_center_ocr: bool = False
+    disable_card_classifier: bool = False
+    debug_dump_dir: Optional[Path] = None
+    debug_dump_every: int = 0
+    debug_dump_max: int = 200
+    debug_dump_annotated: bool = False
     
     # Override specific settings
     steps: Optional[int] = None
@@ -186,6 +201,24 @@ def parse_args() -> tuple[TrainConfig, list[str]]:
     parser.add_argument("--steps", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--train-ratio", type=float, default=None)
+    parser.add_argument("--perception-stride", type=int, default=TrainConfig.perception_stride,
+                        help="Run full perception every N stepped frames (throughput knob)")
+    parser.add_argument("--return-state-grid", action="store_true",
+                        help="Include full observation tensors in RPC responses (debug; slower)")
+    parser.add_argument("--detector-count", type=int, default=TrainConfig.detector_count,
+                        help="Use only the first N YOLO detectors (1 = faster, 2 = default)")
+    parser.add_argument("--disable-center-ocr", action="store_true",
+                        help="Skip center-screen OCR (faster); rely on OK-button probe for match end")
+    parser.add_argument("--disable-card-classifier", action="store_true",
+                        help="Skip card classifier (faster; uses fallback cards)")
+    parser.add_argument("--debug-dump-dir", type=Path, default=None,
+                        help="Dump perception + obs tensors to this directory (debug)")
+    parser.add_argument("--debug-dump-every", type=int, default=0,
+                        help="Dump every N perception frames (0 disables; default 0)")
+    parser.add_argument("--debug-dump-max", type=int, default=200,
+                        help="Maximum number of debug dumps to write")
+    parser.add_argument("--debug-dump-annotated", action="store_true",
+                        help="Also dump YOLO overlay images (slower)")
     
     args, remaining = parser.parse_known_args()
     
@@ -199,6 +232,15 @@ def parse_args() -> tuple[TrainConfig, list[str]]:
         pixels=args.pixels,
         pixel_height=args.pixel_height,
         pixel_width=args.pixel_width,
+        perception_stride=args.perception_stride,
+        return_state_grid=args.return_state_grid,
+        detector_count=args.detector_count,
+        disable_center_ocr=args.disable_center_ocr,
+        disable_card_classifier=args.disable_card_classifier,
+        debug_dump_dir=args.debug_dump_dir,
+        debug_dump_every=args.debug_dump_every,
+        debug_dump_max=args.debug_dump_max,
+        debug_dump_annotated=args.debug_dump_annotated,
         steps=args.steps,
         batch_size=args.batch_size,
         train_ratio=args.train_ratio,
@@ -212,18 +254,20 @@ def load_config(train_cfg: TrainConfig, remaining_args: list[str]) -> elements.C
     configs_path = DREAMERV3_ROOT / "dreamerv3" / "configs.yaml"
     configs = yaml.YAML(typ='safe').load(configs_path.read_text())
     
-    # Start with defaults
+    # Start with DreamerV3 defaults.
     config = elements.Config(configs['defaults'])
-    
-    # Apply requested config presets
+
+    # Apply Clash Royale specific defaults next (so user presets can override them).
+    config = config.update(CLASH_ROYALE_CONFIG)
+
+    # Apply requested config presets (excluding defaults, already loaded).
     for name in train_cfg.configs:
+        if name == 'defaults':
+            continue
         if name in configs:
             config = config.update(configs[name])
-        elif name != 'defaults':
+        else:
             print(f"[train_dreamerv3] Warning: Config preset '{name}' not found, skipping")
-    
-    # Apply Clash Royale specific overrides
-    config = config.update(CLASH_ROYALE_CONFIG)
     
     # Apply CLI overrides
     cli_overrides = {}
@@ -311,9 +355,47 @@ def make_agent(config: elements.Config, bridge: RemoteBridgeV3):
         replica=config.replica,
         replicas=config.replicas,
     ))
-    
+
     # Wrap with MaskedAgent for action masking
     agent = MaskedAgent(agent, action_key='action')
+
+    # Print model size summary for reproducibility and debugging.
+    try:
+        params = getattr(agent, "params", None)
+        if params is not None:
+            total = 0
+            for v in params.values():
+                shape = getattr(v, "shape", None)
+                if not shape:
+                    continue
+                total += int(np.prod(shape))
+            million = total / 1e6
+            deter = int(getattr(config.agent.dyn.rssm, "deter", -1))
+            hidden = int(getattr(config.agent.dyn.rssm, "hidden", -1))
+            classes = int(getattr(config.agent.dyn.rssm, "classes", -1))
+            enc_typ = str(getattr(config.agent.enc, "typ", "unknown"))
+            dec_typ = str(getattr(config.agent.dec, "typ", "unknown"))
+            obs_mode = "pixels" if bool(getattr(config, "pixels", False)) else "semantic_grid"
+            print(
+                f"[train_dreamerv3] Model params: {million:.1f}M "
+                f"(rssm deter={deter} hidden={hidden} classes={classes}, enc={enc_typ}, dec={dec_typ}, obs={obs_mode})"
+            )
+            try:
+                import json
+
+                out = elements.Path(config.logdir) / "model_summary.json"
+                out.write_text(json.dumps({
+                    "param_count": int(total),
+                    "param_count_millions": float(million),
+                    "rssm": {"deter": deter, "hidden": hidden, "classes": classes},
+                    "encoder": enc_typ,
+                    "decoder": dec_typ,
+                    "obs_mode": obs_mode,
+                }, indent=2))
+            except Exception:
+                pass
+    except Exception as exc:
+        print(f"[train_dreamerv3] Warning: failed to compute model size: {exc}")
     
     return agent
 
@@ -440,22 +522,28 @@ def start_grpc_server(
     from cr.rpc.v1.server import RpcServerConfig, serve_forever
     
     def _run_server():
-        proc_cfg = ProcessorConfig()
+        proc_cfg = ProcessorConfig(
+            perception_stride=max(1, int(train_cfg.perception_stride)),
+            return_state_grid=bool(train_cfg.return_state_grid),
+            debug_dump_dir=str(train_cfg.debug_dump_dir) if train_cfg.debug_dump_dir else None,
+            debug_dump_every=int(train_cfg.debug_dump_every),
+            debug_dump_max=int(train_cfg.debug_dump_max),
+            debug_dump_annotated=bool(train_cfg.debug_dump_annotated),
+        )
         # Always configure perception - needed for reward calculation even in pixel mode
         from src.perception.katacr_pipeline import KataCRVisionConfig
-
-        ocr_gpu = False
-        try:
-            import torch
-
-            ocr_gpu = bool(torch.cuda.is_available())
-        except Exception:
-            ocr_gpu = False
+        # Default to CPU OCR for portability. Paddle GPU wheels are often the
+        # most fragile dependency in containerized setups.
+        # Override by setting `CR_OCR_GPU=1` in the environment.
+        ocr_gpu = bool(int(os.environ.get("CR_OCR_GPU", "0")))
 
         vision_cfg = KataCRVisionConfig(
             debug_save_parts=train_cfg.save_perception_crops,
             debug_parts_dir=Path(config.logdir) / "perception_crops",
             ocr_gpu=ocr_gpu,
+            detector_count=int(train_cfg.detector_count),
+            enable_center_ocr=not bool(train_cfg.disable_center_ocr),
+            enable_card_classifier=not bool(train_cfg.disable_card_classifier),
         )
         processor = FrameServiceProcessor(
             proc_cfg,
