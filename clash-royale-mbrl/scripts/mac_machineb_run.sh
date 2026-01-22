@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage (run on your Mac):
+  ./clash-royale-mbrl/scripts/mac_machineb_run.sh \
+    --vm 20.82.136.186 \
+    --vm-port 50051 \
+    --key ./ml-2-a10_key.pem \
+    --capture-region 0,38,496,1078 \
+    --capture-debug-dir ./capture_debug \
+    --fps 30 --action-hz 2
+
+What it does:
+  1) Opens an SSH tunnel: localhost:<local-port> -> VM 127.0.0.1:<vm-port>
+  2) Runs remote_client_loop.py sending frames and (optionally) requesting actions
+
+Tip:
+  - Use `python clash-royale-mbrl/src/utils/window_finder.py` to get capture-region.
+EOF
+}
+
+VM=
+VM_PORT=50051
+LOCAL_PORT=50051
+KEY=./ml-2-a10_key.pem
+CAPTURE_REGION=
+CAPTURE_DEBUG_DIR=
+FPS=30
+ACTION_HZ=2
+SCRCPY_TITLE=Android
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+
+EXTRA_CLIENT_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --vm) VM="$2"; shift 2;;
+    --vm-port) VM_PORT="$2"; shift 2;;
+    --local-port) LOCAL_PORT="$2"; shift 2;;
+    --key) KEY="$2"; shift 2;;
+    --capture-region) CAPTURE_REGION="$2"; shift 2;;
+    --capture-debug-dir) CAPTURE_DEBUG_DIR="$2"; shift 2;;
+    --fps) FPS="$2"; shift 2;;
+    --action-hz) ACTION_HZ="$2"; shift 2;;
+    --scrcpy-title) SCRCPY_TITLE="$2"; shift 2;;
+    --) shift; EXTRA_CLIENT_ARGS+=("$@"); break;;
+    -h|--help) usage; exit 0;;
+    *) echo "Unknown arg: $1" >&2; usage; exit 2;;
+  esac
+done
+
+if [[ -z "${VM}" ]]; then
+  echo "--vm is required" >&2
+  usage
+  exit 2
+fi
+if [[ -z "${CAPTURE_REGION}" ]]; then
+  echo "--capture-region is required (left,top,width,height)" >&2
+  usage
+  exit 2
+fi
+if [[ ! -f "${KEY}" ]]; then
+  echo "SSH key not found: ${KEY}" >&2
+  exit 2
+fi
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$REPO_ROOT"
+
+cleanup() {
+  if [[ -n "${TUNNEL_PID:-}" ]]; then
+    kill "${TUNNEL_PID}" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup EXIT
+
+echo "[mac_machineb_run] Opening SSH tunnel localhost:${LOCAL_PORT} -> ${VM} 127.0.0.1:${VM_PORT}"
+ssh -i "${KEY}" -N \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 \
+  -L "${LOCAL_PORT}:127.0.0.1:${VM_PORT}" \
+  "azureuser@${VM}" &
+TUNNEL_PID=$!
+
+sleep 1
+
+CLIENT_ARGS=(
+  "${PYTHON_BIN}" clash-royale-mbrl/scripts/remote_client_loop.py
+  --target "127.0.0.1:${LOCAL_PORT}"
+  --want-action
+  --fps "${FPS}"
+  --action-hz "${ACTION_HZ}"
+  --jpeg --jpeg-quality 70
+  --scrcpy-title "${SCRCPY_TITLE}"
+  --capture-region "${CAPTURE_REGION}"
+)
+if [[ -n "${CAPTURE_DEBUG_DIR}" ]]; then
+  CLIENT_ARGS+=(--capture-debug-dir "${CAPTURE_DEBUG_DIR}")
+fi
+
+echo "[mac_machineb_run] Running remote client..."
+exec "${CLIENT_ARGS[@]}" "${EXTRA_CLIENT_ARGS[@]}"
+
