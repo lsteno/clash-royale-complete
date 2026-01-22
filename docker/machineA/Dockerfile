@@ -54,6 +54,9 @@ COPY KataCR KataCR
 # Install Clash Royale pipeline (perception + gRPC + scripts).
 RUN pip install -e clash-royale-mbrl
 
+# Ultralytics tracking deps (KataCR uses BYTETracker; needs `lap`).
+RUN pip install -U lap
+
 # Resolve version conflicts introduced by vision/OCR dependencies.
 # - Dreamer/JAX stack expects NumPy < 2.
 # - KataCR uses PaddleOCR, which expects OpenCV <= 4.6.0.66.
