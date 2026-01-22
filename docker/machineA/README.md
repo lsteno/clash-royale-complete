@@ -42,6 +42,21 @@ sudo chown -R $USER:$USER /mnt/azureuser/logs_dreamerv3 /mnt/azureuser/dumps
 sudo docker-compose -f docker/machineA/docker-compose.vm.yml up --build
 ```
 
+### Override defaults (port, logdir, model size)
+
+The VM compose supports env var overrides so you can run multiple configs without editing YAML:
+
+```bash
+export HOST_RPC_PORT=50052
+export HOST_LOGDIR=/mnt/azureuser/logs_dreamerv3_100m
+export HOST_DUMPDIR=/mnt/azureuser/dumps_100m
+export CR_SIZE=size100m
+sudo mkdir -p "$HOST_LOGDIR" "$HOST_DUMPDIR"
+sudo chown -R $USER:$USER "$HOST_LOGDIR" "$HOST_DUMPDIR"
+
+sudo docker-compose -f docker/machineA/docker-compose.vm.yml up --build -d
+```
+
 ## Notes
 
 - KataCR weights are **not** baked into the image; mount `KataCR/` after you download weights.
