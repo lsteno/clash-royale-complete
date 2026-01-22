@@ -1,5 +1,6 @@
 services:
   machinea:
+    runtime: nvidia
     # Bind only to localhost on the VM. Use SSH port-forward from your laptop.
     ports:
       - "127.0.0.1:50051:50051"
