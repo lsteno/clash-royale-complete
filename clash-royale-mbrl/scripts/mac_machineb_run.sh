@@ -24,6 +24,7 @@ EOF
 VM=
 VM_PORT=50051
 LOCAL_PORT=50051
+LOCAL_PORT_SET=0
 KEY=./ml-2-a10_key.pem
 CAPTURE_REGION=
 CAPTURE_DEBUG_DIR=
@@ -32,13 +33,13 @@ ACTION_HZ=2
 SCRCPY_TITLE=Android
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
-EXTRA_CLIENT_ARGS=()
+declare -a EXTRA_CLIENT_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --vm) VM="$2"; shift 2;;
     --vm-port) VM_PORT="$2"; shift 2;;
-    --local-port) LOCAL_PORT="$2"; shift 2;;
+    --local-port) LOCAL_PORT="$2"; LOCAL_PORT_SET=1; shift 2;;
     --key) KEY="$2"; shift 2;;
     --capture-region) CAPTURE_REGION="$2"; shift 2;;
     --capture-debug-dir) CAPTURE_DEBUG_DIR="$2"; shift 2;;
@@ -69,12 +70,58 @@ fi
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
+_port_in_use() {
+  local port="$1"
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1
+    return $?
+  fi
+  if command -v nc >/dev/null 2>&1; then
+    nc -z 127.0.0.1 "${port}" >/dev/null 2>&1
+    return $?
+  fi
+  return 1
+}
+
+_wait_for_local_listener() {
+  local port="$1"
+  local deadline_s="${2:-5}"
+  local t0
+  t0="$(date +%s)"
+  while true; do
+    if _port_in_use "${port}"; then
+      return 0
+    fi
+    if [[ $(( $(date +%s) - t0 )) -ge "${deadline_s}" ]]; then
+      return 1
+    fi
+    sleep 0.1
+  done
+}
+
 cleanup() {
   if [[ -n "${TUNNEL_PID:-}" ]]; then
     kill "${TUNNEL_PID}" >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT
+
+if _port_in_use "${LOCAL_PORT}"; then
+  if [[ "${LOCAL_PORT_SET}" -eq 1 ]]; then
+    echo "[mac_machineb_run] Local port ${LOCAL_PORT} is already in use." >&2
+    echo "Pick a different local port (example: --local-port 50052), or stop the existing SSH tunnel." >&2
+    if command -v lsof >/dev/null 2>&1; then
+      lsof -nP -iTCP:"${LOCAL_PORT}" -sTCP:LISTEN || true
+    fi
+    exit 2
+  fi
+  for p in $(seq 50051 50150); do
+    if ! _port_in_use "${p}"; then
+      LOCAL_PORT="${p}"
+      break
+    fi
+  done
+fi
 
 echo "[mac_machineb_run] Opening SSH tunnel localhost:${LOCAL_PORT} -> ${VM} 127.0.0.1:${VM_PORT}"
 ssh -i "${KEY}" -N \
@@ -84,9 +131,16 @@ ssh -i "${KEY}" -N \
   "azureuser@${VM}" &
 TUNNEL_PID=$!
 
-sleep 1
+if ! kill -0 "${TUNNEL_PID}" >/dev/null 2>&1; then
+  echo "[mac_machineb_run] SSH tunnel process exited immediately; aborting." >&2
+  exit 1
+fi
+if ! _wait_for_local_listener "${LOCAL_PORT}" 5; then
+  echo "[mac_machineb_run] SSH tunnel did not open local port ${LOCAL_PORT}; aborting." >&2
+  exit 1
+fi
 
-CLIENT_ARGS=(
+declare -a CLIENT_ARGS=(
   "${PYTHON_BIN}" clash-royale-mbrl/scripts/remote_client_loop.py
   --target "127.0.0.1:${LOCAL_PORT}"
   --want-action
@@ -101,5 +155,7 @@ if [[ -n "${CAPTURE_DEBUG_DIR}" ]]; then
 fi
 
 echo "[mac_machineb_run] Running remote client..."
-exec "${CLIENT_ARGS[@]}" "${EXTRA_CLIENT_ARGS[@]}"
-
+if [[ ${#EXTRA_CLIENT_ARGS[@]} -gt 0 ]]; then
+  exec "${CLIENT_ARGS[@]}" "${EXTRA_CLIENT_ARGS[@]}"
+fi
+exec "${CLIENT_ARGS[@]}"
