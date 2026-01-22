@@ -40,6 +40,8 @@ RUN pip install --extra-index-url https://download.pytorch.org/whl/cu121 \
 
 # OCR deps (CPU by default; avoids needing Paddle GPU wheels).
 RUN pip install "paddlepaddle==2.6.2" "paddleocr==2.7.0.3"
+# paddleocr pulls in NumPy>=2, but Dreamer/JAX stack expects NumPy<2.
+RUN pip install -U "numpy<2"
 
 # Install Clash Royale pipeline (perception + gRPC + scripts).
 RUN pip install -e clash-royale-mbrl
