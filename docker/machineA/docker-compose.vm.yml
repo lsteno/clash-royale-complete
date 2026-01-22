@@ -16,6 +16,11 @@ services:
       - CR_OCR_GPU=0
       - XLA_PYTHON_CLIENT_PREALLOCATE=false
       - XLA_FLAGS=--xla_gpu_strict_conv_algorithm_picker=false
+      # Avoid permission errors for OCR/caches inside the container.
+      - HOME=/tmp
+      - XDG_CACHE_HOME=/tmp/.cache
+      - MPLCONFIGDIR=/tmp/matplotlib
+      - PADDLEOCR_BASE_DIR=/tmp/.paddleocr
       # Trainer runtime toggles (passed into container; used by the bash command).
       - CR_SIZE=${CR_SIZE:-}
       - CR_DETECTOR_COUNT=${CR_DETECTOR_COUNT:-}

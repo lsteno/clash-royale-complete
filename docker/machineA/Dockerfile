@@ -7,6 +7,11 @@ ENV PIP_NO_CACHE_DIR=1
 # JAX/XLA: reduce “grab all VRAM” behavior by default.
 ENV XLA_PYTHON_CLIENT_PREALLOCATE=false
 ENV XLA_FLAGS=--xla_gpu_strict_conv_algorithm_picker=false
+# Avoid permission errors for OCR/caches inside the container.
+ENV HOME=/tmp
+ENV XDG_CACHE_HOME=/tmp/.cache
+ENV MPLCONFIGDIR=/tmp/matplotlib
+ENV PADDLEOCR_BASE_DIR=/tmp/.paddleocr
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-venv python3-dev \
