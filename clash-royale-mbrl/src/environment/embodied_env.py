@@ -16,6 +16,7 @@ from __future__ import annotations
 import functools
 import queue
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple
 
@@ -205,7 +206,7 @@ class ClashRoyaleEmbodiedEnv(embodied.Env):
     def __init__(
         self,
         bridge: RemoteBridgeV3,
-        step_timeout: float = 60.0,
+        step_timeout: float | None = 60.0,
         flatten_obs: bool = True,
         obs_shape_override: Optional[tuple[int, ...]] = None,
         obs_dtype: np.dtype = np.float32,
@@ -215,6 +216,8 @@ class ClashRoyaleEmbodiedEnv(embodied.Env):
         Args:
             bridge: The RemoteBridgeV3 instance connecting to the gRPC processor.
             step_timeout: Maximum seconds to wait for a new frame in step().
+              If None, wait indefinitely. Note: A timeout should not crash the
+              whole trainer process; this env will keep waiting and log.
             flatten_obs: If True, flatten the (C,H,W) observation to (C*H*W,).
                          If False, keep as (C,H,W) for potential CNN encoding.
         """
@@ -222,6 +225,7 @@ class ClashRoyaleEmbodiedEnv(embodied.Env):
         self._step_timeout = step_timeout
         self._flatten_obs = flatten_obs
         self._mapper = ActionMapper(DEFAULT_DEPLOY_CELLS)
+        self._last_timeout_log = 0.0
         
         # Observation dtype
         self._obs_dtype = np.dtype(obs_dtype)
@@ -312,13 +316,20 @@ class ClashRoyaleEmbodiedEnv(embodied.Env):
             self._current_step = None
         
         # Wait for the first frame
-        try:
-            self._current_step = self._bridge.next_step(timeout=self._step_timeout)
-        except queue.Empty:
-            raise TimeoutError(
-                f"No frame received within {self._step_timeout}s. "
-                "Is the remote client connected and sending frames?"
-            )
+        while True:
+            try:
+                self._current_step = self._bridge.next_step(timeout=self._step_timeout)
+                break
+            except queue.Empty:
+                now = time.time()
+                if (now - self._last_timeout_log) >= 10.0:
+                    self._last_timeout_log = now
+                    tout = "∞" if self._step_timeout is None else str(self._step_timeout)
+                    print(
+                        f"[ClashRoyaleEmbodiedEnv] No frame received within {tout}s. "
+                        "Waiting for remote client..."
+                    )
+                continue
         
         # Apply action mask for the new state
         self._apply_action_mask()
@@ -358,13 +369,20 @@ class ClashRoyaleEmbodiedEnv(embodied.Env):
         self._current_step.set_action(decoded_action)
         
         # Wait for the next frame
-        try:
-            self._current_step = self._bridge.next_step(timeout=self._step_timeout)
-        except queue.Empty:
-            raise TimeoutError(
-                f"No frame received within {self._step_timeout}s during step. "
-                "The remote client may have disconnected."
-            )
+        while True:
+            try:
+                self._current_step = self._bridge.next_step(timeout=self._step_timeout)
+                break
+            except queue.Empty:
+                now = time.time()
+                if (now - self._last_timeout_log) >= 10.0:
+                    self._last_timeout_log = now
+                    tout = "∞" if self._step_timeout is None else str(self._step_timeout)
+                    print(
+                        f"[ClashRoyaleEmbodiedEnv] No frame received within {tout}s during step. "
+                        "Waiting for remote client..."
+                    )
+                continue
         
         # Apply action mask for the new state
         self._apply_action_mask()
