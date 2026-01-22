@@ -33,6 +33,9 @@ RUN pip install -e dreamerv3-main
 
 # Install JAX with CUDA 12 support (GPU training).
 RUN pip install -U "jax[cuda12]==0.4.33"
+# KataCR's YOLO pipeline imports Flax/Orbax utilities (even when the card
+# classifier is disabled), so include them in the image.
+RUN pip install -U "flax" "orbax-checkpoint"
 
 # Install CUDA-enabled PyTorch for YOLO/Ultralytics.
 RUN pip install --extra-index-url https://download.pytorch.org/whl/cu121 \
