@@ -32,7 +32,7 @@ services:
         "defaults",
         "size12m",
         "--detector-count",
-        "1",
+        "2",
         "--disable-center-ocr",
         "--disable-card-classifier",
         "--perception-stride",
@@ -45,4 +45,3 @@ services:
         "50",
         "--debug-dump-annotated"
       ]
-
