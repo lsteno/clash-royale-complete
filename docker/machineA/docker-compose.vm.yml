@@ -16,6 +16,16 @@ services:
       - CR_OCR_GPU=0
       - XLA_PYTHON_CLIENT_PREALLOCATE=false
       - XLA_FLAGS=--xla_gpu_strict_conv_algorithm_picker=false
+      # Trainer runtime toggles (passed into container; used by the bash command).
+      - CR_SIZE=${CR_SIZE:-}
+      - CR_DETECTOR_COUNT=${CR_DETECTOR_COUNT:-}
+      - CR_PERCEPTION_STRIDE=${CR_PERCEPTION_STRIDE:-}
+      - CR_ENABLE_CENTER_OCR=${CR_ENABLE_CENTER_OCR:-}
+      - CR_ENABLE_CARD_CLASSIFIER=${CR_ENABLE_CARD_CLASSIFIER:-}
+      - CR_DUMP_EVERY=${CR_DUMP_EVERY:-}
+      - CR_DUMP_MAX=${CR_DUMP_MAX:-}
+      - CR_DUMP_ANNOTATED=${CR_DUMP_ANNOTATED:-}
+      - CR_EXTRA_ARGS=${CR_EXTRA_ARGS:-}
     volumes:
       # Store logs and debug dumps on the large data disk (/mnt).
       # Override with HOST_LOGDIR / HOST_DUMPDIR.
