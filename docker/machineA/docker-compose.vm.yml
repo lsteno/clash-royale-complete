@@ -30,26 +30,26 @@ services:
           python clash-royale-mbrl/train_dreamerv3.py
           --logdir /app/logs_dreamerv3
           --rpc-host 0.0.0.0 --rpc-port 50051
-          --configs defaults "${CR_SIZE:-size12m}"
-          --detector-count "${CR_DETECTOR_COUNT:-2}"
-          --perception-stride "${CR_PERCEPTION_STRIDE:-1}"
+          --configs defaults "$${CR_SIZE:-size12m}"
+          --detector-count "$${CR_DETECTOR_COUNT:-2}"
+          --perception-stride "$${CR_PERCEPTION_STRIDE:-1}"
           --debug-dump-dir /app/dumps
-          --debug-dump-every "${CR_DUMP_EVERY:-1}"
-          --debug-dump-max "${CR_DUMP_MAX:-50}"
+          --debug-dump-every "$${CR_DUMP_EVERY:-1}"
+          --debug-dump-max "$${CR_DUMP_MAX:-50}"
         )
-        if [ "${CR_ENABLE_CENTER_OCR:-0}" != "1" ]; then
+        if [ "$${CR_ENABLE_CENTER_OCR:-0}" != "1" ]; then
           ARGS+=(--disable-center-ocr)
         fi
-        if [ "${CR_ENABLE_CARD_CLASSIFIER:-0}" != "1" ]; then
+        if [ "$${CR_ENABLE_CARD_CLASSIFIER:-0}" != "1" ]; then
           ARGS+=(--disable-card-classifier)
         fi
-        if [ "${CR_DUMP_ANNOTATED:-1}" = "1" ]; then
+        if [ "$${CR_DUMP_ANNOTATED:-1}" = "1" ]; then
           ARGS+=(--debug-dump-annotated)
         fi
-        if [ -n "${CR_EXTRA_ARGS:-}" ]; then
+        if [ -n "$${CR_EXTRA_ARGS:-}" ]; then
           # shellcheck disable=SC2206
-          EXTRA=( ${CR_EXTRA_ARGS} )
-          ARGS+=("${EXTRA[@]}")
+          EXTRA=( $${CR_EXTRA_ARGS} )
+          ARGS+=("$${EXTRA[@]}")
         fi
-        exec "${ARGS[@]}"
+        exec "$${ARGS[@]}"
       '
