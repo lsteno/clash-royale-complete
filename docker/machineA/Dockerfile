@@ -9,7 +9,7 @@ ENV XLA_PYTHON_CLIENT_PREALLOCATE=false
 ENV XLA_FLAGS=--xla_gpu_strict_conv_algorithm_picker=false
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 python3.11-venv python3.11-dev \
+    python3 python3-venv python3-dev \
     git curl ca-certificates \
     ffmpeg \
     build-essential pkg-config \
@@ -17,21 +17,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
   && rm -rf /var/lib/apt/lists/*
 
-RUN python3.11 -m venv /venv
+RUN python3 -m venv /venv
 ENV PATH="/venv/bin:$PATH"
 RUN pip install -U pip setuptools wheel
 
 WORKDIR /app
 
-# Copy only manifests first for caching.
-COPY dreamerv3-main/requirements.txt dreamerv3-main/requirements.txt
-COPY dreamerv3-main/setup.py dreamerv3-main/setup.py
-COPY dreamerv3-main/README.md dreamerv3-main/README.md
-COPY clash-royale-mbrl/pyproject.toml clash-royale-mbrl/pyproject.toml
+# Copy sources.
+COPY dreamerv3-main dreamerv3-main
+COPY clash-royale-mbrl clash-royale-mbrl
+COPY KataCR KataCR
 
-# Install DreamerV3 + core deps (JAX, elements, embodied, etc.).
-# Note: This installs DreamerV3 requirements, not the heavy optional envs from its Dockerfile.
+# Install DreamerV3 + core deps (elements, embodied, etc.).
 RUN pip install -e dreamerv3-main
+
+# Install JAX with CUDA 12 support (GPU training).
+RUN pip install -U "jax[cuda12]==0.4.33"
 
 # Install CUDA-enabled PyTorch for YOLO/Ultralytics.
 RUN pip install --extra-index-url https://download.pytorch.org/whl/cu121 \
@@ -41,11 +42,7 @@ RUN pip install --extra-index-url https://download.pytorch.org/whl/cu121 \
 RUN pip install "paddlepaddle==2.6.2" "paddleocr==2.7.0.3"
 
 # Install Clash Royale pipeline (perception + gRPC + scripts).
-COPY clash-royale-mbrl clash-royale-mbrl
 RUN pip install -e clash-royale-mbrl
-
-# The KataCR repo is copied to make imports work, but weights should be mounted at runtime.
-COPY KataCR KataCR
 
 EXPOSE 50051
 

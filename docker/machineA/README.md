@@ -28,8 +28,24 @@ docker run --rm -it --gpus all \
 docker compose -f docker/machineA/docker-compose.yml up --build
 ```
 
+## Run on Azure VM (Compose + override)
+
+This repo includes an Azure override file that:
+- binds gRPC to `127.0.0.1:50051` (use an SSH tunnel from your laptop)
+- writes logs and debug dumps to `/mnt/azureuser`
+- starts the trainer with debug-dump flags enabled
+
+```bash
+sudo mkdir -p /mnt/azureuser/logs_dreamerv3 /mnt/azureuser/dumps
+sudo chown -R $USER:$USER /mnt/azureuser/logs_dreamerv3 /mnt/azureuser/dumps
+
+docker compose \
+  -f docker/machineA/docker-compose.yml \
+  -f docker/machineA/docker-compose.azure.yml \
+  up --build
+```
+
 ## Notes
 
 - KataCR weights are **not** baked into the image; mount `KataCR/` after you download weights.
 - If you hit CUDA/JAX issues, try `--configs debug` or switch platform with `--jax.platform cpu` for quick sanity checks.
-

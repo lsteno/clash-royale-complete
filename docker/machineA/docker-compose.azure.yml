@@ -1,0 +1,39 @@
+services:
+  machinea:
+    # Bind only to localhost on the VM. Use SSH port-forward from your laptop.
+    ports:
+      - "127.0.0.1:50051:50051"
+    environment:
+      - KATACR_QUIET=1
+      - CR_OCR_GPU=0
+    volumes:
+      # Store logs and debug dumps on the large data disk (/mnt).
+      - /mnt/azureuser/logs_dreamerv3:/app/logs_dreamerv3
+      - /mnt/azureuser/dumps:/app/dumps
+    command:
+      [
+        "python",
+        "clash-royale-mbrl/train_dreamerv3.py",
+        "--logdir",
+        "/app/logs_dreamerv3",
+        "--rpc-host",
+        "0.0.0.0",
+        "--rpc-port",
+        "50051",
+        "--configs",
+        "defaults",
+        "size12m",
+        "--detector-count",
+        "1",
+        "--disable-center-ocr",
+        "--disable-card-classifier",
+        "--perception-stride",
+        "1",
+        "--debug-dump-dir",
+        "/app/dumps",
+        "--debug-dump-every",
+        "1",
+        "--debug-dump-max",
+        "50",
+        "--debug-dump-annotated"
+      ]
