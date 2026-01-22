@@ -9,6 +9,9 @@ streamed from Machine B via gRPC. It integrates:
 
 Usage:
     python train_dreamerv3.py --logdir ./logs_dreamerv3 --rpc-port 50051
+
+Hive mode (single VM):
+    python train_dreamerv3.py --env-mode hive --adb-start-port 5555 --adb-count 2
     
 For debugging on CPU:
     python train_dreamerv3.py --configs debug --logdir ./logs_debug
@@ -68,6 +71,7 @@ from src.environment.embodied_env import (
     RemoteBridgeV3,
     MaskedAgent,
 )
+from src.environment.hive_env import ClashRoyaleHiveEmbodiedEnv, HiveEnvConfig
 from src.specs import ACTION_SPEC, OBS_SPEC
 
 
@@ -157,6 +161,16 @@ class TrainConfig:
     logdir: Path = Path("logs_dreamerv3")
     rpc_host: str = "0.0.0.0"
     rpc_port: int = 50051
+    env_mode: str = "grpc"
+    adb_serials: Optional[str] = None
+    adb_start_port: Optional[int] = None
+    adb_count: int = 0
+    adb_path: str = "adb"
+    redroid_width: int = 720
+    redroid_height: int = 1280
+    redroid_canonical_width: int = 576
+    redroid_canonical_height: int = 1280
+    hive_no_auto_restart: bool = False
     configs: tuple = ("defaults",)  # Config presets to load
     save_perception_crops: bool = False
     seed: int = 0
@@ -188,6 +202,27 @@ def parse_args() -> tuple[TrainConfig, list[str]]:
     parser.add_argument("--logdir", type=Path, default=TrainConfig.logdir)
     parser.add_argument("--rpc-host", type=str, default=TrainConfig.rpc_host)
     parser.add_argument("--rpc-port", type=int, default=TrainConfig.rpc_port)
+    parser.add_argument("--env-mode", type=str, default=TrainConfig.env_mode,
+                        choices=["grpc", "hive"],
+                        help="Environment mode: grpc (remote client) or hive (local Redroid)")
+    parser.add_argument("--adb-serials", type=str, default=TrainConfig.adb_serials,
+                        help="Comma-separated ADB serials (e.g., localhost:5555,localhost:5556)")
+    parser.add_argument("--adb-start-port", type=int, default=TrainConfig.adb_start_port,
+                        help="Base localhost port for ADB devices (e.g., 5555)")
+    parser.add_argument("--adb-count", type=int, default=TrainConfig.adb_count,
+                        help="How many sequential ADB ports to use from --adb-start-port")
+    parser.add_argument("--adb-path", type=str, default=TrainConfig.adb_path,
+                        help="Path to adb binary")
+    parser.add_argument("--redroid-width", type=int, default=TrainConfig.redroid_width,
+                        help="Redroid screen width in pixels")
+    parser.add_argument("--redroid-height", type=int, default=TrainConfig.redroid_height,
+                        help="Redroid screen height in pixels")
+    parser.add_argument("--redroid-canonical-width", type=int, default=TrainConfig.redroid_canonical_width,
+                        help="Canonical width for perception (KataCR)")
+    parser.add_argument("--redroid-canonical-height", type=int, default=TrainConfig.redroid_canonical_height,
+                        help="Canonical height for perception (KataCR)")
+    parser.add_argument("--hive-no-auto-restart", action="store_true",
+                        help="Disable auto-navigation between training camp matches in hive mode")
     parser.add_argument("--configs", nargs="*", default=["defaults"],
                         help="Config presets to load (e.g., 'defaults', 'debug', 'size12m')")
     parser.add_argument("--save-perception-crops", action="store_true")
@@ -226,6 +261,16 @@ def parse_args() -> tuple[TrainConfig, list[str]]:
         logdir=args.logdir,
         rpc_host=args.rpc_host,
         rpc_port=args.rpc_port,
+        env_mode=args.env_mode,
+        adb_serials=args.adb_serials,
+        adb_start_port=args.adb_start_port,
+        adb_count=args.adb_count,
+        adb_path=args.adb_path,
+        redroid_width=args.redroid_width,
+        redroid_height=args.redroid_height,
+        redroid_canonical_width=args.redroid_canonical_width,
+        redroid_canonical_height=args.redroid_canonical_height,
+        hive_no_auto_restart=args.hive_no_auto_restart,
         configs=tuple(args.configs),
         save_perception_crops=args.save_perception_crops,
         seed=args.seed,
@@ -246,6 +291,23 @@ def parse_args() -> tuple[TrainConfig, list[str]]:
         train_ratio=args.train_ratio,
     )
     return cfg, remaining
+
+
+def _parse_serials(text: Optional[str]) -> list[str]:
+    if not text:
+        return []
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
+def resolve_hive_serials(train_cfg: TrainConfig) -> list[str]:
+    serials = _parse_serials(train_cfg.adb_serials)
+    if serials:
+        return serials
+    if train_cfg.adb_start_port is not None and train_cfg.adb_count > 0:
+        start = int(train_cfg.adb_start_port)
+        count = int(train_cfg.adb_count)
+        return [f"localhost:{start + i}" for i in range(count)]
+    return []
 
 
 def load_config(train_cfg: TrainConfig, remaining_args: list[str]) -> elements.Config:
@@ -312,31 +374,80 @@ def load_config(train_cfg: TrainConfig, remaining_args: list[str]) -> elements.C
 # Factory Functions (following DreamerV3 patterns)
 # ============================================================================
 
-def make_agent(config: elements.Config, bridge: RemoteBridgeV3):
-    """Create the DreamerV3 agent."""
-    # Create a temporary env to get obs/act spaces
+def resolve_obs_settings(config: elements.Config):
     obs_shape_override = None
     flatten_obs = True
     obs_dtype = np.float32
-    if getattr(config, 'pixels', False):
-        # Use channels-last uint8 images for CNN encoder
-        height = int(getattr(config, 'pixel_height', 180))
-        width = int(getattr(config, 'pixel_width', 320))
+    if getattr(config, "pixels", False):
+        height = int(getattr(config, "pixel_height", 180))
+        width = int(getattr(config, "pixel_width", 320))
         obs_shape_override = (height, width, 3)
         flatten_obs = False
         obs_dtype = np.uint8
+    return obs_shape_override, flatten_obs, obs_dtype
 
-    env = ClashRoyaleEmbodiedEnv(
-        bridge,
-        flatten_obs=flatten_obs,
-        obs_shape_override=obs_shape_override,
-        obs_dtype=obs_dtype,
-    )
+
+def make_base_env(
+    config: elements.Config,
+    train_cfg: TrainConfig,
+    env_mode: str,
+    bridge: Optional[RemoteBridgeV3],
+    *,
+    serial: Optional[str] = None,
+):
+    obs_shape_override, flatten_obs, obs_dtype = resolve_obs_settings(config)
+    if env_mode == "grpc":
+        return ClashRoyaleEmbodiedEnv(
+            bridge=bridge,
+            step_timeout=config.run.episode_timeout,
+            flatten_obs=flatten_obs,
+            obs_shape_override=obs_shape_override,
+            obs_dtype=obs_dtype,
+        )
+    if env_mode == "hive":
+        if not serial:
+            raise ValueError("Hive mode requires an ADB serial per environment.")
+        hive_cfg = HiveEnvConfig(
+            device_serial=serial,
+            adb_path=train_cfg.adb_path,
+            screen_width=int(train_cfg.redroid_width),
+            screen_height=int(train_cfg.redroid_height),
+            canonical_width=int(train_cfg.redroid_canonical_width),
+            canonical_height=int(train_cfg.redroid_canonical_height),
+            use_adb_capture_only=True,
+            auto_restart=not bool(train_cfg.hive_no_auto_restart),
+        )
+        vision_cfg = make_vision_config(train_cfg, config)
+        return ClashRoyaleHiveEmbodiedEnv(
+            hive_cfg,
+            vision_cfg=vision_cfg,
+            flatten_obs=flatten_obs,
+            pixels=bool(getattr(config, "pixels", False)),
+            pixel_height=int(getattr(config, "pixel_height", 180)),
+            pixel_width=int(getattr(config, "pixel_width", 320)),
+        )
+    raise ValueError(f"Unknown env_mode: {env_mode}")
+
+
+def make_agent(
+    config: elements.Config,
+    train_cfg: TrainConfig,
+    env_mode: str,
+    bridge: Optional[RemoteBridgeV3],
+    hive_serials: list[str],
+):
+    """Create the DreamerV3 agent."""
+    serial = hive_serials[0] if hive_serials else None
+    env = make_base_env(config, train_cfg, env_mode, bridge, serial=serial)
     
     # Filter spaces for agent
     notlog = lambda k: not k.startswith('log/')
     obs_space = {k: v for k, v in env.obs_space.items() if notlog(k)}
     act_space = {k: v for k, v in env.act_space.items() if k != 'reset'}
+    try:
+        env.close()
+    except Exception:
+        pass
     
     # Check if this is a random agent run
     if config.random_agent:
@@ -400,27 +511,17 @@ def make_agent(config: elements.Config, bridge: RemoteBridgeV3):
     return agent
 
 
-def make_env(config: elements.Config, bridge: RemoteBridgeV3, index: int = 0):
+def make_env(
+    config: elements.Config,
+    train_cfg: TrainConfig,
+    env_mode: str,
+    bridge: Optional[RemoteBridgeV3],
+    hive_serials: list[str],
+    index: int = 0,
+):
     """Create the Clash Royale environment."""
-    obs_shape_override = None
-    flatten_obs = True  # Default: flattened state grid
-    obs_dtype = np.float32
-
-    if getattr(config, 'pixels', False):
-        # Use channels-last uint8 images for CNN encoder
-        height = int(getattr(config, 'pixel_height', 180))
-        width = int(getattr(config, 'pixel_width', 320))
-        obs_shape_override = (height, width, 3)
-        flatten_obs = False
-        obs_dtype = np.uint8
-
-    env = ClashRoyaleEmbodiedEnv(
-        bridge=bridge,
-        step_timeout=config.run.episode_timeout,
-        flatten_obs=flatten_obs,
-        obs_shape_override=obs_shape_override,
-        obs_dtype=obs_dtype,
-    )
+    serial = hive_serials[index] if hive_serials else None
+    env = make_base_env(config, train_cfg, env_mode, bridge, serial=serial)
     # Apply standard wrappers
     env = wrap_env(env, config)
     return env
@@ -512,6 +613,19 @@ def make_logger(config: elements.Config):
 # gRPC Server Management
 # ============================================================================
 
+def make_vision_config(train_cfg: TrainConfig, config: elements.Config):
+    from src.perception.katacr_pipeline import KataCRVisionConfig
+    ocr_gpu = bool(int(os.environ.get("CR_OCR_GPU", "0")))
+    return KataCRVisionConfig(
+        debug_save_parts=train_cfg.save_perception_crops,
+        debug_parts_dir=Path(config.logdir) / "perception_crops",
+        ocr_gpu=ocr_gpu,
+        detector_count=int(train_cfg.detector_count),
+        enable_center_ocr=not bool(train_cfg.disable_center_ocr),
+        enable_card_classifier=not bool(train_cfg.disable_card_classifier),
+    )
+
+
 def start_grpc_server(
     bridge: RemoteBridgeV3,
     train_cfg: TrainConfig,
@@ -531,20 +645,7 @@ def start_grpc_server(
             debug_dump_annotated=bool(train_cfg.debug_dump_annotated),
         )
         # Always configure perception - needed for reward calculation even in pixel mode
-        from src.perception.katacr_pipeline import KataCRVisionConfig
-        # Default to CPU OCR for portability. Paddle GPU wheels are often the
-        # most fragile dependency in containerized setups.
-        # Override by setting `CR_OCR_GPU=1` in the environment.
-        ocr_gpu = bool(int(os.environ.get("CR_OCR_GPU", "0")))
-
-        vision_cfg = KataCRVisionConfig(
-            debug_save_parts=train_cfg.save_perception_crops,
-            debug_parts_dir=Path(config.logdir) / "perception_crops",
-            ocr_gpu=ocr_gpu,
-            detector_count=int(train_cfg.detector_count),
-            enable_center_ocr=not bool(train_cfg.disable_center_ocr),
-            enable_card_classifier=not bool(train_cfg.disable_card_classifier),
-        )
+        vision_cfg = make_vision_config(train_cfg, config)
         processor = FrameServiceProcessor(
             proc_cfg,
             vision_cfg=vision_cfg,
@@ -579,41 +680,59 @@ def main() -> None:
     """Main entry point for DreamerV3 training."""
     train_cfg, remaining_args = parse_args()
     config = load_config(train_cfg, remaining_args)
+    env_mode = str(train_cfg.env_mode)
     
     # Setup logdir
     logdir = elements.Path(config.logdir)
     print(f"[train_dreamerv3] Logdir: {logdir}")
     logdir.mkdir()
-    config.save(logdir / 'config.yaml')
-    
+
+    bridge: Optional[RemoteBridgeV3] = None
+    hive_serials: list[str] = []
+    if env_mode == "grpc":
+        # Create the remote bridge for gRPC <-> training communication
+        bridge = RemoteBridgeV3(action_timeout=30.0)
+        # Start gRPC server
+        _server_thread = start_grpc_server(bridge, train_cfg, config)
+
+        # Do not block on connection here: initialize training immediately.
+        # The training loop will start once the first frame arrives (env reset blocks
+        # until a frame is received), which keeps setup work off the critical path.
+        print("[train_dreamerv3] Starting setup. Training will begin after first frame.")
+
+        def _log_connection() -> None:
+            print("[train_dreamerv3] Waiting for remote client to send frames...")
+            while not bridge.wait_for_connection(timeout=10.0):
+                print("[train_dreamerv3] Still waiting for remote client...")
+            print("[train_dreamerv3] Remote client detected.")
+
+        threading.Thread(target=_log_connection, name="wait-for-client", daemon=True).start()
+    elif env_mode == "hive":
+        hive_serials = resolve_hive_serials(train_cfg)
+        if not hive_serials:
+            raise RuntimeError(
+                "Hive mode requires --adb-serials or --adb-start-port/--adb-count."
+            )
+        run_cfg = dict(config.run)
+        run_cfg["envs"] = len(hive_serials)
+        run_cfg["debug"] = False
+        config = config.update(run=run_cfg)
+        print(f"[train_dreamerv3] Hive mode with {len(hive_serials)} envs: {hive_serials}")
+    else:
+        raise ValueError(f"Unknown env_mode: {env_mode}")
+
+    config.save(logdir / "config.yaml")
+
     # Print config summary
     print(f"[train_dreamerv3] Task: {config.task}")
     print(f"[train_dreamerv3] Steps: {config.run.steps}")
     print(f"[train_dreamerv3] Batch: {config.batch_size}x{config.batch_length}")
     print(f"[train_dreamerv3] Train ratio: {config.run.train_ratio}")
+    print(f"[train_dreamerv3] Envs: {config.run.envs} (mode={env_mode})")
     print(f"[train_dreamerv3] JAX platform: {config.jax.platform}")
-    
+
     # Initialize timer
     elements.timer.global_timer.enabled = config.logger.timer
-    
-    # Create the remote bridge for gRPC <-> training communication
-    bridge = RemoteBridgeV3(action_timeout=30.0)
-    
-    # Start gRPC server
-    _server_thread = start_grpc_server(bridge, train_cfg, config)
-
-    # Do not block on connection here: initialize training immediately.
-    # The training loop will start once the first frame arrives (env reset blocks
-    # until a frame is received), which keeps setup work off the critical path.
-    print("[train_dreamerv3] Starting setup. Training will begin after first frame.")
-
-    def _log_connection() -> None:
-        print("[train_dreamerv3] Waiting for remote client to send frames...")
-        while not bridge.wait_for_connection(timeout=10.0):
-            print("[train_dreamerv3] Still waiting for remote client...")
-        print("[train_dreamerv3] Remote client detected.")
-
-    threading.Thread(target=_log_connection, name="wait-for-client", daemon=True).start()
     
     # Create training components using DreamerV3's patterns
     args = elements.Config(
@@ -631,9 +750,9 @@ def main() -> None:
     
     # Run training using embodied.run.train
     embodied.run.train(
-        bind(make_agent, config, bridge),
+        bind(make_agent, config, train_cfg, env_mode, bridge, hive_serials),
         bind(make_replay, config, 'replay'),
-        bind(make_env, config, bridge),
+        bind(make_env, config, train_cfg, env_mode, bridge, hive_serials),
         bind(make_stream, config),
         bind(make_logger, config),
         args,

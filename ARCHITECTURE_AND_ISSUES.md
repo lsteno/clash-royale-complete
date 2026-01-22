@@ -1,98 +1,88 @@
 # Clash Royale MBRL System Architecture & Current Issues
 
-This document summarizes the current end-to-end architecture (what runs where, how data flows) and the known issues across the environment, game client, VM, and tooling.
+This document summarizes the current single-VM "Hive" architecture (what runs where, how data flows) and the known issues across host, containers, perception, and training. Legacy remote gRPC is still supported but no longer the default.
 
 ---
 
 ## Architecture (High-Level)
 
 ### Components
-- **Machine B (Mac + Emulator)**
-  - Android emulator (e.g., MEmu or similar), controlled via ADB + UI automation.
-  - `clash-royale-mbrl/scripts/remote_client_loop.py` captures frames, navigates UI, and sends gRPC requests.
-  - Screen capture via scrcpy window + ROI (manual `capture_region`).
-
-- **Machine A (Azure VM + GPU)**
-  - Docker container (`docker/machineA/Dockerfile`, `docker/machineA/docker-compose.vm.yml`).
-  - Runs **DreamerV3** training (`clash-royale-mbrl/train_dreamerv3.py`).
-  - Runs **gRPC FrameService** (`cr.rpc.v1.processor.FrameServiceProcessor`) for perception + state encoding.
-  - **KataCR** perception stack (YOLO + OCR + state builder).
+- **Single VM (Azure NVads A10 v5, Ubuntu 22.04)**
+  - Docker + NVIDIA Container Toolkit.
+  - Redroid kernel modules (binder/ashmem).
+- **Redroid Hive (5-10 Android containers)**
+  - `docker/hive/docker-compose.yml`
+  - Each container exposes ADB on localhost (5555, 5556, ...).
+  - libhoudini enabled for ARM -> x86 translation.
+- **DreamerV3 Brain (single process)**
+  - `clash-royale-mbrl/train_dreamerv3.py --env-mode hive`
+  - Runs KataCR perception locally (YOLO + OCR + state builder).
+  - Steps multiple environments in a batch.
 
 ### Data Flow
-1. **Mac client captures frame** from emulator (scrcpy ROI) and sends to VM via gRPC.
-2. **VM FrameService** decodes frame, runs perception (YOLO/OCR), encodes semantic grid or pixels.
-3. **RemoteBridge** posts observation/reward to Dreamer training loop.
-4. **DreamerV3** returns action, VM replies to client.
-5. **Mac client executes action** via ADB (tap card + placement).
+1. DreamerV3 steps env i (localhost ADB).
+2. Env captures frame via `adb exec-out screencap -p`.
+3. KataCR builds state + reward, encodes semantic grid or pixels.
+4. Agent returns action, applied via ADB taps.
+5. Repeat across N envs per batch.
 
 ### Debug / Validation Artifacts
-- **VM debug dumps** (server-side):
-  - `/mnt/azureuser/dumps_*/frame_*` → `frame_bgr.png`, `arena_boxes.png`, `katacr_render.png`, `state.json`, `info.json`, `obs.npy`, `obs_channels.png`, `action_mask.npy`.
-- **Mac capture debugging** (client-side):
-  - `--capture-debug-dir` saves `capture_full_*.png` and `capture_roi_*.png`.
-- **Training logs**
-  - `/mnt/azureuser/logs_dreamerv3_*/metrics.jsonl`
-  - `/mnt/azureuser/logs_dreamerv3_*/scores.jsonl`
-  - `model_summary.json` and `config.yaml` per run.
+- `logs_dreamerv3_*/metrics.jsonl` and `scores.jsonl`
+- `model_summary.json` and `config.yaml` per run
+- Optional perception crops: `logs_dreamerv3_*/perception_crops/`
+
+### Legacy Remote (Optional)
+- gRPC FrameService + remote client loop (Machine A/B) remains supported in `train_dreamerv3.py --env-mode grpc`.
 
 ---
 
 ## Current Issues (Grouped)
 
-### 1) Environment / Perception
+### 1) Host / Redroid
+- **Kernel modules**
+  - binder/ashmem must be installed; missing modules prevent containers from booting.
+- **ARM translation**
+  - libhoudini instability can cause crashes or slow startup.
+
+### 2) ADB Capture / Automation
+- **ADB screencap throughput**
+  - `adb exec-out screencap -p` can be a bottleneck with many containers.
+- **Coordinate calibration**
+  - UI tap coords + OK button probe need recalibration for 720x1280.
+
+### 3) Perception
 - **OCR noise / state drift**
-  - Elixir OCR occasionally fails → wrong action masks.
-  - Tower HP OCR can jump (warnings like `ocr_hp > old hp`).
-- **YOLO/Tracking dependencies**
-  - Ultralytics tracker requires `lap` (fixed in Dockerfile).
-- **Slow perception**
-  - YOLO + OCR + rendering makes inference heavy; low end-to-end FPS.
+  - Elixir OCR failures and tower HP jumps still affect action masks.
+- **Slow inference**
+  - YOLO + OCR remains heavy; FPS drops with N envs.
 
-### 2) Client (Mac) + Capture
-- **ROI calibration fragile**
-  - Incorrect `capture_region` crops out HUD/cards → model sees wrong state.
-- **Menu navigation failure modes**
-  - UI taps can get stuck on menus or end screens without recovery.
-
-### 3) Training / DreamerV3
-- **Stalls when frames stop**
-  - Trainer used to crash on 600s timeout (fixed to wait indefinitely).
+### 4) Training / DreamerV3
+- **Parallel env contention**
+  - Many envs increase GPU/CPU load; policy/update steps slow down.
 - **Large model sizes**
-  - `size400m` fits but may be slow; compile time high; memory pressure on A10.
+  - `size400m` can stress A10 memory with multiple envs.
 
-### 4) Networking / Tunneling
-- **FD shutdown / UNAVAILABLE**
-  - Happens when SSH tunnel dies or connects to wrong local port.
-  - Multiple tunnels on same port cause conflicts.
-
-### 5) Docker / Build Workflow
-- **Rebuilds too often**
-  - No `.dockerignore` originally; copying whole repo caused cache invalidation.
-  - Added `.dockerignore` and reordered Dockerfile to improve cache.
-- **Permission errors**
-  - OCR caches attempted to write to `/.paddleocr` → fixed via `HOME=/tmp` and `PADDLEOCR_BASE_DIR`.
-
-### 6) Logging / TensorBoard
-- **TensorBoard empty**
-  - `logger.outputs` defaults to `[jsonl, scope]`; TensorBoard needs `tensorboard`.
-  - Must pass `--logger.outputs tensorboard jsonl scope` (requires restart).
+### 5) Docker / Compose
+- **Port collisions**
+  - Multiple Redroid stacks on same host collide on ADB ports.
+- **Volume growth**
+  - `./dataN` volumes grow; need cleanup between runs.
 
 ---
 
 ## Known Constraints / Risks
 - **Compute limits**
-  - A10 24GB VRAM is tight for `size400m` + perception; throughput is low.
+  - A10 24GB VRAM is still tight for large models + perception.
 - **No API access**
-  - Reliance on CV/OCR over UI makes the pipeline brittle to UI changes.
+  - UI-based CV/OCR remains brittle to UI changes.
 - **Wall-clock latency**
-  - Slow perception + gRPC + ADB = delayed feedback for policy learning.
+  - Multi-env contention can inflate step latency and reduce effective FPS.
 
 ---
 
 ## Suggested Next Stabilizations (Short-Term)
-- Lock ROI using capture debug images before long runs.
-- Reduce `fps` and `action_hz` until RPC deadlines are stable.
-- Increase `--deadline-ms` for large models.
-- Enable TensorBoard outputs to monitor actual learning curves.
-- Add a “dump current state now” endpoint (optional) for inspection without restarting.
-
+- Calibrate tap coords + OK button probe for Redroid resolution.
+- Start with 2-4 envs; scale up after stable throughput.
+- Reduce `--pixel-width/--pixel-height` if pixel mode slows down.
+- Enable TensorBoard outputs (`--logger.outputs tensorboard jsonl scope`).
+- Consider reducing perception load (single detector, OCR CPU/GPU toggle).

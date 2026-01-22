@@ -63,11 +63,23 @@ class MatchNavigator:
         self.adb = adb
         self.cfg = cfg
 
+    def _scale_tap(self, x: int, y: int) -> Tuple[int, int]:
+        ref_w = int(getattr(self.adb.config, "tap_reference_width", self.adb.config.screen_width))
+        ref_h = int(getattr(self.adb.config, "tap_reference_height", self.adb.config.screen_height))
+        if ref_w <= 0 or ref_h <= 0:
+            return x, y
+        if ref_w == self.adb.config.screen_width and ref_h == self.adb.config.screen_height:
+            return x, y
+        sx = x * self.adb.config.screen_width / ref_w
+        sy = y * self.adb.config.screen_height / ref_h
+        return int(round(sx)), int(round(sy))
+
     def _run_sequence(self, sequence: Sequence[TapSpec]):
         for tap in sequence:
             if self.cfg.log_taps and tap.label:
                 print(f"[Navigator] tapping {tap.label} at ({tap.x}, {tap.y})")
-            self.adb.tap(tap.x, tap.y)
+            x, y = self._scale_tap(tap.x, tap.y)
+            self.adb.tap(x, y)
             if tap.delay > 0:
                 time.sleep(tap.delay)
 
@@ -92,6 +104,8 @@ class EmulatorConfig:
     device_serial: Optional[str] = None  # None for default device
     screen_width: int = 1080
     screen_height: int = 2400
+    tap_reference_width: int = 1080  # Reference resolution for tap/UI coordinates
+    tap_reference_height: int = 2400
     capture_region: Optional[dict] = None  # {"top": 0, "left": 0, "width": 1080, "height": 2400}
     scrcpy_window_title: str = "scrcpy"  # Window title to capture from
     canonical_width: int = 576  # KataCR expects portrait 1280x576 (H/W ≈ 2.22)
@@ -128,9 +142,17 @@ class ADBController:
                 capture_output=True, text=True, timeout=5
             )
             lines = result.stdout.strip().split('\n')
-            devices = [l for l in lines[1:] if l.strip() and 'device' in l]
+            devices = []
+            for line in lines[1:]:
+                parts = line.strip().split()
+                if len(parts) >= 2 and parts[1] == "device":
+                    devices.append(parts[0])
             if not devices:
                 raise RuntimeError("No Android devices/emulators connected. Start Android Studio Emulator first.")
+            if self.config.device_serial and self.config.device_serial not in devices:
+                raise RuntimeError(
+                    f"ADB device '{self.config.device_serial}' not found. Available devices: {devices}"
+                )
             print(f"Connected devices: {devices}")
         except FileNotFoundError:
             raise RuntimeError(f"ADB not found at {self.config.adb_path}. Install Android SDK or set correct path.")
@@ -182,12 +204,15 @@ class ADBScreenshotter:
     def __init__(self, config: EmulatorConfig):
         self.config = config
 
+    def _adb_cmd(self, *args) -> subprocess.CompletedProcess:
+        cmd = [self.config.adb_path]
+        if self.config.device_serial:
+            cmd.extend(["-s", self.config.device_serial])
+        cmd.extend(args)
+        return subprocess.run(cmd, capture_output=True, timeout=3)
+
     def capture(self) -> np.ndarray:
-        result = subprocess.run(
-            [self.config.adb_path, "exec-out", "screencap", "-p"],
-            capture_output=True,
-            timeout=3,
-        )
+        result = self._adb_cmd("exec-out", "screencap", "-p")
         if result.returncode != 0:
             raise RuntimeError(f"adb screencap failed: {result.stderr}")
         img_array = np.frombuffer(result.stdout, dtype=np.uint8)
@@ -339,8 +364,10 @@ class ClashRoyaleEmulatorEnv:
 
     def _screen_to_frame_coords(self, x: int, y: int, frame: np.ndarray) -> Tuple[int, int]:
         """Scale raw screen coords (e.g., 1080x2400) into the normalized frame size."""
-        fx = int(round(x * frame.shape[1] / self.config.screen_width))
-        fy = int(round(y * frame.shape[0] / self.config.screen_height))
+        ref_w = int(getattr(self.config, "tap_reference_width", self.config.screen_width))
+        ref_h = int(getattr(self.config, "tap_reference_height", self.config.screen_height))
+        fx = int(round(x * frame.shape[1] / max(1, ref_w)))
+        fy = int(round(y * frame.shape[0] / max(1, ref_h)))
         fx = int(np.clip(fx, 0, frame.shape[1] - 1))
         fy = int(np.clip(fy, 0, frame.shape[0] - 1))
         return fx, fy

@@ -4,6 +4,9 @@ Environment package initialization.
 For remote training with DreamerV3, use:
     from src.environment.embodied_env import ClashRoyaleEmbodiedEnv, RemoteBridgeV3
 
+For local Redroid hive training with DreamerV3, use:
+    from src.environment.hive_env import ClashRoyaleHiveEmbodiedEnv, HiveEnvConfig
+
 Legacy rlpyt/DreamerV1 imports (require rlpyt, dreamer-pytorch):
     from src.environment.remote_bridge import RemoteBridge, RemoteClashRoyaleEnv
 
