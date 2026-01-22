@@ -28,9 +28,9 @@ docker run --rm -it --gpus all \
 docker compose -f docker/machineA/docker-compose.yml up --build
 ```
 
-## Run on Azure VM (Compose + override)
+## Run on Azure VM (docker-compose)
 
-This repo includes an Azure override file that:
+This repo includes a VM compose file that:
 - binds gRPC to `127.0.0.1:50051` (use an SSH tunnel from your laptop)
 - writes logs and debug dumps to `/mnt/azureuser`
 - starts the trainer with debug-dump flags enabled
@@ -39,10 +39,7 @@ This repo includes an Azure override file that:
 sudo mkdir -p /mnt/azureuser/logs_dreamerv3 /mnt/azureuser/dumps
 sudo chown -R $USER:$USER /mnt/azureuser/logs_dreamerv3 /mnt/azureuser/dumps
 
-docker compose \
-  -f docker/machineA/docker-compose.yml \
-  -f docker/machineA/docker-compose.azure.yml \
-  up --build
+sudo docker-compose -f docker/machineA/docker-compose.vm.yml up --build
 ```
 
 ## Notes

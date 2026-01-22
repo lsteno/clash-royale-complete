@@ -1,16 +1,23 @@
 services:
   machinea:
+    build:
+      context: ../..
+      dockerfile: docker/machineA/Dockerfile
     runtime: nvidia
-    # Bind only to localhost on the VM. Use SSH port-forward from your laptop.
     ports:
+      # Bind only to localhost on the VM. Use SSH port-forward from your laptop.
       - "127.0.0.1:50051:50051"
     environment:
       - KATACR_QUIET=1
       - CR_OCR_GPU=0
+      - XLA_PYTHON_CLIENT_PREALLOCATE=false
+      - XLA_FLAGS=--xla_gpu_strict_conv_algorithm_picker=false
     volumes:
       # Store logs and debug dumps on the large data disk (/mnt).
       - /mnt/azureuser/logs_dreamerv3:/app/logs_dreamerv3
       - /mnt/azureuser/dumps:/app/dumps
+      # Mount KataCR weights from the repo checkout.
+      - ../../KataCR:/app/KataCR
     command:
       [
         "python",
@@ -38,3 +45,4 @@ services:
         "50",
         "--debug-dump-annotated"
       ]
+

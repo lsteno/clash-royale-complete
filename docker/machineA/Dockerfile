@@ -46,6 +46,12 @@ RUN pip install -U "numpy<2"
 # Install Clash Royale pipeline (perception + gRPC + scripts).
 RUN pip install -e clash-royale-mbrl
 
+# Resolve version conflicts introduced by vision/OCR dependencies.
+# - Dreamer/JAX stack expects NumPy < 2.
+# - KataCR uses PaddleOCR, which expects OpenCV <= 4.6.0.66.
+RUN pip uninstall -y opencv-python-headless opencv-contrib-python opencv-python || true \
+  && pip install -U --force-reinstall "numpy<2" "opencv-python==4.6.0.66"
+
 EXPOSE 50051
 
 # Default: start the DreamerV3 training server (Machine A).
