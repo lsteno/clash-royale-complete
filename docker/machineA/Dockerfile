@@ -23,10 +23,8 @@ RUN pip install -U pip setuptools wheel
 
 WORKDIR /app
 
-# Copy sources.
+# Copy DreamerV3 first to maximize cache reuse.
 COPY dreamerv3-main dreamerv3-main
-COPY clash-royale-mbrl clash-royale-mbrl
-COPY KataCR KataCR
 
 # Install DreamerV3 + core deps (elements, embodied, etc.).
 RUN pip install -e dreamerv3-main
@@ -47,6 +45,11 @@ RUN pip install --extra-index-url https://download.pytorch.org/whl/cu121 \
 RUN pip install "paddlepaddle==2.6.2" "paddleocr==2.7.0.3"
 # paddleocr pulls in NumPy>=2, but Dreamer/JAX stack expects NumPy<2.
 RUN pip install -U "numpy<2"
+
+# Copy Clash Royale sources after heavy deps so edits don't invalidate them.
+COPY clash-royale-mbrl clash-royale-mbrl
+# Copy KataCR code (weights are expected to be mounted at runtime).
+COPY KataCR KataCR
 
 # Install Clash Royale pipeline (perception + gRPC + scripts).
 RUN pip install -e clash-royale-mbrl
