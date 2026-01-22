@@ -8,6 +8,7 @@ from __future__ import annotations
 import time
 import json
 from pathlib import Path
+import threading
 from dataclasses import dataclass
 from typing import Callable, Optional, Sequence, Tuple, TYPE_CHECKING
 
@@ -60,11 +61,12 @@ class FrameServiceProcessor:
         pixel_width: int = 256,
     ):
         self._cfg = cfg
-        # Always run perception for reward calculation (tower HP tracking)
-        # Even in pixel mode, we need KataCR to compute dense rewards
-        from src.perception.katacr_pipeline import KataCRPerceptionEngine
-
-        self._perception: "KataCRPerceptionEngine" = KataCRPerceptionEngine(vision_cfg)
+        # Perception (YOLO + OCR + state/reward builders) is heavy to import and
+        # initialize. To make the gRPC server bind immediately (avoiding client
+        # UNAVAILABLE errors), initialize it lazily on the first perception frame.
+        self._vision_cfg = vision_cfg
+        self._perception = None
+        self._perception_lock = threading.Lock()
         self._encoder = StateTensorEncoder(cfg.max_game_seconds)
         self._action_fn = action_fn
         self._bridge = bridge
@@ -86,6 +88,16 @@ class FrameServiceProcessor:
         self._dump_annotated = bool(getattr(cfg, "debug_dump_annotated", False))
         self._dump_count = 0
 
+    def _ensure_perception(self):
+        if self._perception is not None:
+            return self._perception
+        with self._perception_lock:
+            if self._perception is None:
+                from src.perception.katacr_pipeline import KataCRPerceptionEngine
+
+                self._perception = KataCRPerceptionEngine(self._vision_cfg)
+        return self._perception
+
     async def process_frame(self, request: pb2.ProcessFrameRequest) -> pb2.ProcessFrameResponse:
         t0 = time.time()
         frame_bgr = self._decode_frame(request)
@@ -100,7 +112,8 @@ class FrameServiceProcessor:
             bool(request.want_action) and (self._frame_count % self._perception_stride == 0)
         )
         if run_perception:
-            perception_result = self._perception.process(frame_bgr, deploy_cards=None)
+            perception = self._ensure_perception()
+            perception_result = perception.process(frame_bgr, deploy_cards=None)
             self._last_perception = perception_result
         else:
             perception_result = self._last_perception
@@ -114,7 +127,7 @@ class FrameServiceProcessor:
 
         # Log tower HP every 5 frames
         if self._frame_count % 5 == 0 and run_perception:
-            rb = self._perception.reward_builder
+            rb = self._ensure_perception().reward_builder
             hp_tower = rb.hp_tower  # shape (2, 2): [ally/enemy][left/right]
             hp_king = rb.hp_king_tower  # shape (2,): [ally, enemy]
             print(
@@ -237,7 +250,8 @@ class FrameServiceProcessor:
 
         if done_value:
             # Clear KataCR state/reward history before the next match begins.
-            self._perception.reset()
+            if self._perception is not None:
+                self._perception.reset()
         return resp
 
     def _dump_debug(
@@ -284,7 +298,7 @@ class FrameServiceProcessor:
 
         # Save a KataCR renderer view (arena + grid + card/elixir text).
         try:
-            sb = getattr(self._perception, "state_builder", None)
+            sb = getattr(self._ensure_perception(), "state_builder", None)
             if sb is not None and hasattr(sb, "render"):
                 rendered = sb.render(action=None)
                 if rendered is not None and getattr(rendered, "size", 0) != 0:
