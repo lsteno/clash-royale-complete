@@ -234,6 +234,22 @@ class ScreenCapture:
         # Fallback to primary monitor
         print("[ScreenCapture] Using full primary monitor (set capture_region for better performance)")
         return self.sct.monitors[1]  # monitors[0] is "all monitors"
+
+    def capture_full_bgr(self) -> Optional[np.ndarray]:
+        """Capture full primary monitor (BGR) for debugging capture bounds."""
+        if self.sct is None:
+            return None
+        screenshot = self.sct.grab(self.sct.monitors[1])
+        frame = np.array(screenshot)
+        return cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+
+    def get_capture_bounds(self) -> Optional[dict]:
+        """Return the current capture region bounds used by mss."""
+        if self.config.use_adb_capture_only:
+            return None
+        if self._monitor is None:
+            self._monitor = self._find_scrcpy_window()
+        return dict(self._monitor) if self._monitor is not None else None
     
     def capture(self) -> np.ndarray:
         """

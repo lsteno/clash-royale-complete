@@ -58,6 +58,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ok-color-bgr", type=str, default=None, help="Override OK button BGR color as b,g,r")
     parser.add_argument("--ok-tol", type=int, default=None, help="Override OK button color tolerance")
     parser.add_argument("--end-screen-dir", type=str, default=None, help="Directory to save end-screen screenshots before clicking OK")
+    parser.add_argument("--capture-debug-dir", type=str, default=None,
+                        help="Save capture debug images (full monitor + ROI) to this directory and continue")
     parser.add_argument("--nav-cooldown-s", type=float, default=12.0, help="Minimum seconds between navigation attempts")
     parser.add_argument("--no-battle-recover-s", type=float, default=25.0, help="If not in battle for this long, try to recover")
     parser.add_argument("--recover-back-count", type=int, default=3, help="How many KEYCODE_BACK presses before re-navigation")
@@ -134,6 +136,37 @@ async def main_async(args: argparse.Namespace) -> None:
     cfg = RpcClientConfig(target=args.target, deadline_ms=args.deadline_ms, max_inflight=args.max_inflight)
     client = FrameServiceClient(cfg)
     await client.connect()
+
+    # Capture debugging: dump a full-monitor screenshot with ROI bounds and
+    # the actual ROI frame that will be sent to the server. This helps
+    # calibrate --capture-region against the scrcpy window on macOS.
+    if args.capture_debug_dir:
+        try:
+            out = Path(args.capture_debug_dir)
+            out.mkdir(parents=True, exist_ok=True)
+            full = getattr(getattr(env, "screen", None), "capture_full_bgr", lambda: None)()
+            bounds = getattr(getattr(env, "screen", None), "get_capture_bounds", lambda: None)()
+            roi = env.get_observation_bgr()
+            ts = int(time.time() * 1000)
+            if full is not None and bounds is not None:
+                annotated = full.copy()
+                l, t, w, h = int(bounds.get("left", 0)), int(bounds.get("top", 0)), int(bounds.get("width", 0)), int(bounds.get("height", 0))
+                cv2.rectangle(annotated, (l, t), (l + w, t + h), (0, 0, 255), 3)
+                cv2.putText(
+                    annotated,
+                    f"capture_region left={l} top={t} width={w} height={h}",
+                    (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    (0, 0, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+                cv2.imwrite(str(out / f"capture_full_{ts}.png"), annotated)
+            cv2.imwrite(str(out / f"capture_roi_{ts}.png"), roi)
+            print(f"[remote_client] Saved capture debug images to {out}")
+        except Exception as exc:
+            print(f"[remote_client] Failed to save capture debug images: {exc}")
 
     # Navigate to training camp on startup
     print("[remote_client] Navigating to training camp...")

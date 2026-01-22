@@ -4,6 +4,9 @@ services:
       context: ../..
       dockerfile: docker/machineA/Dockerfile
     runtime: nvidia
+    # Run as the host user (Azure 'azureuser' is typically uid/gid 1000).
+    # This prevents root-owned artifacts in mounted volumes like /mnt/azureuser/dumps.
+    user: "1000:1000"
     ports:
       # Bind only to localhost on the VM. Use SSH port-forward from your laptop.
       - "127.0.0.1:50051:50051"

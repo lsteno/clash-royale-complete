@@ -74,3 +74,4 @@ clash-royale-mbrl/logs_online/*
 *.deb
 clash-royale-mbrl/end_screens/*
 ml-2-a10_key.pem
+_vm_dumps_check/
