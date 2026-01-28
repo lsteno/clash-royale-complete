@@ -17,6 +17,7 @@ State data info (Dict):
 - 'elixir' (int): Current elixir
 """
 
+import os
 import scipy.sparse
 import scipy.spatial
 from katacr.yolov8.custom_result import CRResults
@@ -40,6 +41,12 @@ SUB_XYXY_TOWER_BAR = [(0.26, 0.2, 1.0, 0.8), (0.26, 0.35, 1.0, 0.9)]
 REMOVE_DEPLOY_DIS_THRE = 50  # dis between the bottom center of text and top center of unit
 DEPLOY_HISTORY_PERSIST_FRAME = 15  # 15 * 0.1 = 1.5 sec
 EDIT_DISTANCE_THRE = 2  # Levenshtein distance between ocr text **in** target text
+
+_QUIET = os.environ.get("KATACR_QUIET", "0").lower() in ("1", "true", "yes")
+
+def _warn(msg: str) -> None:
+  if not _QUIET:
+    print(msg)
 
 class StateBuilder:
   bar1_units = ['bar', 'tower-bar', 'king-tower-bar']
@@ -93,7 +100,7 @@ class StateBuilder:
     if arr.size == 8 and arr.ndim != 1:
       arr = arr.reshape(8)
     if arr.ndim != 1 or arr.shape[0] != 8:
-      print(f"Warning(state): (time={self.time}) {label} box has invalid shape {arr.shape}, skipping.")
+      _warn(f"Warning(state): (time={self.time}) {label} box has invalid shape {arr.shape}, skipping.")
       return None
     return arr
   
@@ -129,7 +136,7 @@ class StateBuilder:
       counter.update({int(b[-1]): 1})
       mxid = counter.most_common(1)[0][0]
       if mxid != int(b[-1]):
-        print(f"Warning(state): (time={self.time}) Find id={id} has wrong bel={int(b[-1])}, change to {mxid}")
+        _warn(f"Warning(state): (time={self.time}) Find id={id} has wrong bel={int(b[-1])}, change to {mxid}")
         b[-1] = mxid
   
   def _build_bar_items(self):

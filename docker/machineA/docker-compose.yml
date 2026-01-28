@@ -1,0 +1,24 @@
+services:
+  machinea:
+    build:
+      context: ../..
+      dockerfile: docker/machineA/Dockerfile
+    ports:
+      - "50051:50051"
+    environment:
+      # Optional: tune JAX memory behavior / debug issues.
+      - XLA_PYTHON_CLIENT_PREALLOCATE=false
+      - XLA_FLAGS=--xla_gpu_strict_conv_algorithm_picker=false
+    volumes:
+      # Persist logs/checkpoints on the host.
+      - ../../logs_dreamerv3:/app/logs_dreamerv3
+      # If KataCR weights are downloaded on the host, mount them into the container.
+      - ../../KataCR:/app/KataCR
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
-from src.environment.online_env import ActionMapper, DEFAULT_DEPLOY_CELLS
+from src.environment.action_utils import ActionMapper, DEFAULT_DEPLOY_CELLS, DEFAULT_SPELL_CELLS
 from src.environment.action_mask import compute_action_mask, set_action_mask
 from rlpyt.envs.base import EnvSpaces, EnvStep
 from dreamer.envs.env import EnvInfo
@@ -71,7 +71,7 @@ class RemoteClashRoyaleEnv:
         self._observation_space = obs_space
         self._action_space = act_space
         self._current: Optional[RemoteStep] = None
-        self._mapper = ActionMapper(DEFAULT_DEPLOY_CELLS)
+        self._mapper = ActionMapper(DEFAULT_DEPLOY_CELLS, DEFAULT_SPELL_CELLS)
         self._episode_return = 0.0
         self.random = np.random.RandomState()  # required by OneHotAction wrapper
 
@@ -119,7 +119,10 @@ class RemoteClashRoyaleEnv:
             a = int(action)
         except Exception:
             return None
-        decoded = self._mapper.decode(a)
+        cards = None
+        if self._current is not None and isinstance(self._current.info, dict):
+            cards = self._current.info.get("cards")
+        decoded = self._mapper.decode(a, cards=cards)
         if decoded is None:
             return None
         card_slot, gx, gy = decoded

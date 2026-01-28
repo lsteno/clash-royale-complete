@@ -19,7 +19,9 @@ class RpcClientConfig:
     """Client knobs for FrameService."""
 
     target: str  # host:port
-    deadline_ms: int = 500
+    # Perception can easily exceed 500ms per frame (YOLO + OCR + classification).
+    # Keep a safer default; callers can still override.
+    deadline_ms: int = 2000
     max_inflight: int = 2
     insecure: bool = True
     root_cert: Optional[bytes] = None

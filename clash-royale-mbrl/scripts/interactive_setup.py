@@ -253,7 +253,7 @@ class ClashRoyaleNavigator:
         arena_left = 0.02
         arena_right = 0.98
         arena_top = 0.12    # Top of arena
-        arena_bottom = 0.77  # Bottom of arena (before cards)
+        arena_bottom = 0.7292  # Bottom of arena (before cards) (~1750px on 2400px height)
         
         # Map grid to screen
         rx = arena_left + (grid_x / 17) * (arena_right - arena_left)

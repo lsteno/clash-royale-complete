@@ -45,6 +45,8 @@ htmlcov/
 # Logs, runs, and experiment outputs (any depth)
 logs/
 **/logs/
+logs_*/
+**/logs_*/
 runs/
 **/runs/
 wandb/
@@ -71,3 +73,5 @@ outputs/
 clash-royale-mbrl/logs_online/*
 *.deb
 clash-royale-mbrl/end_screens/*
+ml-2-a10_key.pem
+_vm_dumps_check/

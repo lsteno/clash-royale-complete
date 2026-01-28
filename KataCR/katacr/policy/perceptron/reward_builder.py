@@ -1,4 +1,5 @@
 import numpy as np
+import os
 from katacr.ocr_text.paddle_ocr import OCR
 from katacr.yolov8.custom_result import CRResults
 from katacr.constants.label_list import unit2idx, idx2unit
@@ -18,6 +19,12 @@ DESTROY_FRAME_DELTA_THRE = 10
 MAX_DELTA_HP = 1600
 MAX_DELTA_HP_IGNORE_STREAK = 5  # Stop ignoring after this many consecutive MAX_DELTA_HP violations
 ELIXIR_OVER_FRAME = 10  # 0.1 * 5 = 1 sec
+
+_QUIET = os.environ.get("KATACR_QUIET", "0").lower() in ("1", "true", "yes")
+
+def _warn(msg: str) -> None:
+  if not _QUIET:
+    print(msg)
 
 # Enemy unit elimination tracking
 UNIT_MISSING_FRAMES_THRESHOLD = 5  # Frames before considering unit eliminated
@@ -81,7 +88,7 @@ class RewardBuilder:
       rec = rec.lower()
       num = ''.join([c for c in rec.strip() if (c in [str(i) for i in range(10)])])
       if conf < OCR_NUM_CONF_THRE or len(num) == 0:
-        print(f"Wrong: (time={self.time}) Don't find bar number (rec={rec}) or conf={conf:.4f} is low")
+        _warn(f"Wrong: (time={self.time}) Don't find bar number (rec={rec}) or conf={conf:.4f} is low")
         num = -1
       else: num = int(num)
       # print(results)  # DEBUG
