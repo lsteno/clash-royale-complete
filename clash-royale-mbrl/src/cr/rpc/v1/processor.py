@@ -45,6 +45,14 @@ class FrameServiceProcessor:
         pixel_height: int = 192,
         pixel_width: int = 256,
     ):
+        # Avoid OpenCV TLS/thread-pool issues when running in background threads.
+        # This is especially important for the gRPC server thread.
+        try:
+            cv2.setNumThreads(0)
+            if hasattr(cv2, "ocl"):
+                cv2.ocl.setUseOpenCL(False)
+        except Exception:
+            pass
         self._cfg = cfg
         # Always run perception for reward calculation (tower HP tracking)
         # Even in pixel mode, we need KataCR to compute dense rewards

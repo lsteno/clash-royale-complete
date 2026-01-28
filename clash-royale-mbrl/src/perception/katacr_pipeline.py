@@ -92,6 +92,20 @@ class VisualFusionAdapter:
         self._last_capture_ts: Optional[float] = None
         self._last_elixir: Optional[int] = None
 
+    def component_status(self, info: Dict) -> Dict[str, bool]:
+        """Health check for perception components.
+
+        Returns a dict with per-component status plus dummy mode flag.
+        """
+        status = {
+            "ocr_time": not info.get("ocr_time_failed", False),
+            "elixir_ocr": not info.get("elixir_failed", False),
+            "card_classifier": bool(getattr(self.classifier, "_available", False)),
+            "detector": self.yolo is not None,
+        }
+        status["dummy_mode"] = not status["card_classifier"]
+        return status
+
     def _validate_assets(self):
         missing = [p for p in self.detectors if not p.exists()]
         if missing:
@@ -213,6 +227,8 @@ class KataCRPerceptionEngine:
         self.visual = VisualFusionAdapter(self.cfg)
         self.state_builder = StateBuilder()
         self.reward_builder = RewardBuilder()
+        self._status_log_last_ts = 0.0
+        self._status_log_interval_sec = 60.0
 
     def reset(self):
         self.state_builder.reset()
@@ -241,5 +257,36 @@ class KataCRPerceptionEngine:
 
         state = self.state_builder.get_state()
         reward = self.reward_builder.get_reward()
+        reward_breakdown = self.reward_builder.get_last_reward_breakdown()
+        info = dict(info)
+        info["reward_breakdown"] = reward_breakdown
+        self._maybe_log_status(info, reward, reward_breakdown)
         return KataCRPerceptionResult(state=state, reward=reward, info=info)
+
+    def _maybe_log_status(self, info: Dict, reward: float, reward_breakdown: Dict[str, float]) -> None:
+        now_ts = time.time()
+        if now_ts - self._status_log_last_ts < self._status_log_interval_sec:
+            return
+        self._status_log_last_ts = now_ts
+
+        status = self.visual.component_status(info)
+        components_ok = all(
+            status[k] for k in ("ocr_time", "elixir_ocr", "card_classifier", "detector")
+        )
+        dummy_mode = status["dummy_mode"]
+        breakdown_parts = []
+        for key in ("enemy_eliminated", "tower", "king-tower", "r_", "elixir"):
+            if key in reward_breakdown:
+                breakdown_parts.append(f"{key}={reward_breakdown[key]:+.4f}")
+        breakdown_str = ", ".join(breakdown_parts) if breakdown_parts else "n/a"
+
+        print(
+            "[Status] "
+            f"time={info.get('time')} "
+            f"elixir={info.get('elixir')} "
+            f"reward={reward:.4f} "
+            f"breakdown={breakdown_str} "
+            f"components_ok={components_ok} "
+            f"dummy_mode={dummy_mode}"
+        )
 

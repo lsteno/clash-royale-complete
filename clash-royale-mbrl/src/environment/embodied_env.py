@@ -257,6 +257,13 @@ class ClashRoyaleEmbodiedEnv(embodied.Env):
             'is_first': elements.Space(bool),
             'is_last': elements.Space(bool),
             'is_terminal': elements.Space(bool),
+            # Reward breakdown logs
+            'log/reward_tower': elements.Space(np.float32),
+            'log/reward_king_tower': elements.Space(np.float32),
+            'log/reward_tower_misc': elements.Space(np.float32),
+            'log/reward_tower_damage': elements.Space(np.float32),
+            'log/reward_elixir_waste': elements.Space(np.float32),
+            'log/reward_enemy_eliminated': elements.Space(np.float32),
         }
         return spaces
 
@@ -287,6 +294,7 @@ class ClashRoyaleEmbodiedEnv(embodied.Env):
         Returns:
             Observation dictionary with state, reward, is_first, is_last, is_terminal.
         """
+        import sys
         should_reset = action.get('reset', False) or self._is_first
         
         if should_reset:
@@ -328,8 +336,11 @@ class ClashRoyaleEmbodiedEnv(embodied.Env):
         self._episode_length = 0
         self._is_first = False
         
-        # Send no-op for the first frame (we don't have an action to take yet)
-        self._current_step.set_action(None)
+        # NOTE: We do NOT set an action here. The gRPC handler for this frame
+        # is blocked waiting for an action. When the policy returns and
+        # _handle_step() is called, it will set the action on this frame
+        # before fetching the next one. This ensures the first action after
+        # reset is actually executed on the emulator.
         
         return self._make_obs(
             reward=0.0,
@@ -396,6 +407,7 @@ class ClashRoyaleEmbodiedEnv(embodied.Env):
         is_terminal: bool,
     ) -> Dict[str, Any]:
         """Construct the observation dictionary from the current step."""
+        reward_breakdown = {}
         if self._current_step is None:
             # Return zeros if no step available (shouldn't happen in normal operation)
             state = np.zeros(self._obs_shape, dtype=np.float32)
@@ -411,7 +423,19 @@ class ClashRoyaleEmbodiedEnv(embodied.Env):
                     state = state.astype(self._obs_dtype)
             # Compute action mask from current step info
             action_mask = self._compute_action_mask()
+            info = self._current_step.info
+            if isinstance(info, dict):
+                reward_breakdown = info.get("reward_breakdown") or {}
+                if reward_breakdown is None:
+                    reward_breakdown = {}
         
+        tower_reward = float(reward_breakdown.get("tower", 0.0) or 0.0)
+        king_tower_reward = float(reward_breakdown.get("king-tower", 0.0) or 0.0)
+        tower_misc_reward = float(reward_breakdown.get("r_", 0.0) or 0.0)
+        elixir_penalty = float(reward_breakdown.get("elixir", 0.0) or 0.0)
+        enemy_elim_reward = float(reward_breakdown.get("enemy_eliminated", 0.0) or 0.0)
+        tower_damage_total = tower_reward + king_tower_reward + tower_misc_reward
+
         return {
             'state': state,
             'action_mask': action_mask,
@@ -419,6 +443,12 @@ class ClashRoyaleEmbodiedEnv(embodied.Env):
             'is_first': is_first,
             'is_last': is_last,
             'is_terminal': is_terminal,
+            'log/reward_tower': np.float32(tower_reward),
+            'log/reward_king_tower': np.float32(king_tower_reward),
+            'log/reward_tower_misc': np.float32(tower_misc_reward),
+            'log/reward_tower_damage': np.float32(tower_damage_total),
+            'log/reward_elixir_waste': np.float32(elixir_penalty),
+            'log/reward_enemy_eliminated': np.float32(enemy_elim_reward),
         }
 
     def _compute_action_mask(self) -> np.ndarray:
@@ -573,13 +603,15 @@ class MaskedAgent:
                             legal_indices = np.where(mask[i] >= 0)[0]
                             if len(legal_indices) > 0:
                                 new_actions[i] = np.random.choice(legal_indices)
+                            else:
+                                new_actions[i] = 0
                 else:
                     if is_illegal:
                         legal_indices = np.where(mask >= 0)[0]
                         if len(legal_indices) > 0:
                             new_actions = np.random.choice(legal_indices)
                         else:
-                            new_actions = sampled_action
+                            new_actions = 0
                     else:
                         new_actions = sampled_action
                 

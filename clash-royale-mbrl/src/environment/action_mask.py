@@ -65,6 +65,8 @@ def compute_action_mask(cards: Sequence | None, elixir: float) -> np.ndarray:
         slot = (action_idx - 1) // cells + 1
         if not _card_affordable(slot):
             mask[action_idx] = negative
+    # Ensure the no-op action is always legal
+    mask[0] = 0.0
     return mask
 
 

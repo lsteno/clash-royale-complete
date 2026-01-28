@@ -28,21 +28,28 @@ class CardClassifier:
     self.state = None
 
     try:
-      ckpt_mngr = CheckpointManager(weight_path)
-      if load_step is None:
-        load_step = int(sorted(Path(weight_path).glob('*'))[-1].name)
-      load_info = ckpt_mngr.restore(load_step)
-      variables, cfg = load_info['variables'], load_info['config']
-      self.img_size = tuple(cfg.get('image_size', self.img_size))
-      self.idx2card = cfg.get('idx2card', self.idx2card)
-      self.card2idx = cfg.get('card2idx', self.card2idx)
-      model_cfg = ModelConfig(**cfg)
-      train_cfg = TrainConfig(**cfg)
-      self.model = ResNet(cfg=model_cfg)
-      self.model.create_fns()
-      state = self.model.get_states(train_cfg, train=False)
-      self.state = state.replace(params=variables['params'], tx=None, opt_state=None, batch_stats=variables['batch_stats'])
-      self._available = True
+      # Temporarily allow host-to-device transfers during model loading
+      # (DreamerV3 sets jax_transfer_guard='disallow' globally)
+      old_guard = jax.config.jax_transfer_guard
+      jax.config.update('jax_transfer_guard', 'allow')
+      try:
+        ckpt_mngr = CheckpointManager(weight_path)
+        if load_step is None:
+          load_step = int(sorted(Path(weight_path).glob('*'))[-1].name)
+        load_info = ckpt_mngr.restore(load_step)
+        variables, cfg = load_info['variables'], load_info['config']
+        self.img_size = tuple(cfg.get('image_size', self.img_size))
+        self.idx2card = cfg.get('idx2card', self.idx2card)
+        self.card2idx = cfg.get('card2idx', self.card2idx)
+        model_cfg = ModelConfig(**cfg)
+        train_cfg = TrainConfig(**cfg)
+        self.model = ResNet(cfg=model_cfg)
+        self.model.create_fns()
+        state = self.model.get_states(train_cfg, train=False)
+        self.state = state.replace(params=variables['params'], tx=None, opt_state=None, batch_stats=variables['batch_stats'])
+        self._available = True
+      finally:
+        jax.config.update('jax_transfer_guard', old_guard)
     except Exception as exc:  # noqa: BLE001
       print(f"Warning: CardClassifier fell back to dummy mode ({exc})")
   
@@ -70,7 +77,14 @@ class CardClassifier:
       return self._fallback_predictions(x.shape[0], keepdim)
     try:
       if x.dtype == np.uint8: x = x.astype(np.float32) / 255.
-      logits = jax.device_get(self.model.predict(self.state, x))
+      # Temporarily allow host-to-device transfers during inference
+      # (DreamerV3 sets jax_transfer_guard='disallow' globally)
+      old_guard = jax.config.jax_transfer_guard
+      jax.config.update('jax_transfer_guard', 'allow')
+      try:
+        logits = jax.device_get(self.model.predict(self.state, x))
+      finally:
+        jax.config.update('jax_transfer_guard', old_guard)
       pred = np.argmax(logits, -1)
       if cvt_label:
         cards = []

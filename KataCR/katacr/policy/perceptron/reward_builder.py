@@ -19,6 +19,11 @@ MAX_DELTA_HP = 1600
 MAX_DELTA_HP_IGNORE_STREAK = 5  # Stop ignoring after this many consecutive MAX_DELTA_HP violations
 ELIXIR_OVER_FRAME = 10  # 0.1 * 5 = 1 sec
 
+# Reward clipping to prevent OCR errors from causing massive reward spikes
+# Max per-step tower reward ~0.5 corresponds to ~750 HP damage (huge spell) on princess tower
+MAX_TOWER_REWARD_PER_STEP = 0.5
+MAX_KING_TOWER_REWARD_PER_STEP = 0.5
+
 # Enemy unit elimination tracking
 UNIT_MISSING_FRAMES_THRESHOLD = 5  # Frames before considering unit eliminated
 UNIT_ELIMINATION_REWARD_SCALE = 0.05  # Scale factor for elimination reward (per elixir)
@@ -51,7 +56,11 @@ class RewardBuilder:
     self.reset()
   
   def reset(self):
-    self.full_hp = {'tower': [1, 1], 'king-tower': [1, 1]}
+    # Initialize full_hp to Training Camp tower HP values.
+    # Princess towers: 1512 HP, King tower: 2568 HP.
+    # This prevents catastrophic reward scaling if OCR fails on first detection.
+    # Values will be updated correctly when OCR successfully reads HP bars.
+    self.full_hp = {'tower': [1512, 1512], 'king-tower': [2568, 2568]}
     self.hp_tower = np.full((2, 2), -1, np.int32)
     self.hp_king_tower = np.full((2,), -1, np.int32)
     self.last_elixir_over_frame = None
@@ -212,7 +221,10 @@ class RewardBuilder:
           if old == -1 and now != 0:  # first view
             self.full_hp['tower'][i] = max(now, full_hp)
           elif old != -1:  # alived: reward +/- (delta/full)
-            reward['tower'] += flag * (old - now) / full_hp
+            step_reward = flag * (old - now) / full_hp
+            # Clip to prevent OCR errors from causing massive reward spikes
+            step_reward = np.clip(step_reward, -MAX_TOWER_REWARD_PER_STEP, MAX_TOWER_REWARD_PER_STEP)
+            reward['tower'] += step_reward
           self.hp_tower[i,j] = now
     # King Tower
     for i, (old, now) in enumerate(zip(self.hp_king_tower, now_hp_king_tower)):
@@ -227,7 +239,10 @@ class RewardBuilder:
           if np.prod(self.hp_tower[i]) != 0:  # towers all alive and open king-tower:  reward -/+ 0.1
             reward['r_'] += -flag * 0.1
         elif old != -1:  # alived: reward +/- (delta/full)
-          reward['king-tower'] += flag * (old - now) / full_hp
+          step_reward = flag * (old - now) / full_hp
+          # Clip to prevent OCR errors from causing massive reward spikes
+          step_reward = np.clip(step_reward, -MAX_KING_TOWER_REWARD_PER_STEP, MAX_KING_TOWER_REWARD_PER_STEP)
+          reward['king-tower'] += step_reward
         self.hp_king_tower[i] = now
     if verbose:
       print("FULL HP:", self.full_hp)
@@ -247,17 +262,25 @@ class RewardBuilder:
     reward['enemy_eliminated'] = elimination_reward
     
     total_reward = sum(reward.values())
+    # Store the breakdown for later retrieval
+    self._last_reward_breakdown = reward.copy()
     if verbose:
       print(f"Time={self.time}, Frame={self.frame_count}, {reward=}, {total_reward=:.4f}")
     return total_reward
+  
+  def get_last_reward_breakdown(self):
+    """Return the breakdown of the last computed reward."""
+    return getattr(self, '_last_reward_breakdown', {'tower': 0, 'king-tower': 0, 'r_': 0, 'elixir': 0, 'enemy_eliminated': 0})
   
   def _compute_enemy_elimination_reward(self, verbose=False):
     """
     Compute reward for eliminating enemy units based on their elixir cost.
     
-    Tracks enemy units (bel=0) across frames. When a tracked unit disappears
+    Tracks enemy units (bel=1) across frames. When a tracked unit disappears
     for UNIT_MISSING_FRAMES_THRESHOLD consecutive frames, it's considered
     eliminated and a reward proportional to its elixir cost is given.
+    
+    Note: bel=0 means ALLY (bottom of screen), bel=1 means ENEMY (top of screen).
     
     Only rewards elimination of units in VALID_ENEMY_ELIMINATION_UNITS whitelist.
     Ignores Dreamer's own cards and any other detections to avoid false positives.
@@ -268,14 +291,15 @@ class RewardBuilder:
     elimination_reward = 0.0
     current_enemy_track_ids = set()
     
-    # Identify current enemy units (bel=0) with valid track IDs
+    # Identify current enemy units (bel=1) with valid track IDs
     for b in self.box:
       track_id = int(b[4])
       cls_idx = int(b[-2])
       bel = int(b[-1])
       
-      # Only track enemy units (bel=0) with valid track IDs
-      if bel != 0 or track_id < 0:
+      # Only track enemy units (bel=1) with valid track IDs
+      # Note: bel=0 is ALLY (bottom), bel=1 is ENEMY (top)
+      if bel != 1 or track_id < 0:
         continue
       
       # Get unit name and check if it's a valid enemy unit to track

@@ -45,7 +45,7 @@ class StateBuilder:
   bar1_units = ['bar', 'tower-bar', 'king-tower-bar']
   bar2_units = [ 'dagger-duchess-tower-bar', 'skeleton-king-bar']
 
-  def __init__(self, persist: int = 3, ocr: OCR = None):
+  def __init__(self, persist: int = 3, ocr: OCR = None, log_warnings: bool = False):
     """
     Args:
       persist (int): The maximum time to memory in bar_history (second).
@@ -65,7 +65,12 @@ class StateBuilder:
     """
     self.persist = persist
     self.ocr = OCR(lang='en') if ocr is None else ocr
+    self.log_warnings = log_warnings
     self.reset()
+
+  def _log_warning(self, msg: str) -> None:
+    if self.log_warnings:
+      print(msg)
 
   def reset(self):
     self.time = 0
@@ -93,7 +98,7 @@ class StateBuilder:
     if arr.size == 8 and arr.ndim != 1:
       arr = arr.reshape(8)
     if arr.ndim != 1 or arr.shape[0] != 8:
-      print(f"Warning(state): (time={self.time}) {label} box has invalid shape {arr.shape}, skipping.")
+      self._log_warning(f"Warning(state): (time={self.time}) {label} box has invalid shape {arr.shape}, skipping.")
       return None
     return arr
   
@@ -129,7 +134,7 @@ class StateBuilder:
       counter.update({int(b[-1]): 1})
       mxid = counter.most_common(1)[0][0]
       if mxid != int(b[-1]):
-        print(f"Warning(state): (time={self.time}) Find id={id} has wrong bel={int(b[-1])}, change to {mxid}")
+        self._log_warning(f"Warning(state): (time={self.time}) Find id={id} has wrong bel={int(b[-1])}, change to {mxid}")
         b[-1] = mxid
   
   def _build_bar_items(self):
@@ -169,7 +174,7 @@ class StateBuilder:
         patches[idx][i] = b
     for i, patch in enumerate(patches):
       if (patch[0] is None) ^ (patch[2] is None):
-        print(f"Warning: (time={self.time}) The tower_bar and tower misalign at patch={i}")
+        self._log_warning(f"Warning: (time={self.time}) The tower_bar and tower misalign at patch={i}")
         continue
       if patch[0] is not None:
         self._add_bar_item(bar1=patch[0], bar2=patch[1], body=patch[2])
@@ -206,7 +211,7 @@ class StateBuilder:
         if dis[idx] < DIS_BAR_AND_BODY_THRE:
           bar_item = self.bar_items[idx]
           if bar_item.bar2 is not None:
-            print(f"Warning(state): (time={self.time}) The bar1(id={bar_item.bar1[-4]}) has bar2(id={bar_item.bar2[-4]}), but bar2(id={box[-4]}) finds it again.")
+            self._log_warning(f"Warning(state): (time={self.time}) The bar1(id={bar_item.bar1[-4]}) has bar2(id={bar_item.bar2[-4]}), but bar2(id={box[-4]}) finds it again.")
           # assert bar_item.bar2 is None, f"The bar1(id={bar_item.bar1[-4]}) has bar2(id={bar_item.bar2[-4]}), but bar2(id={box[-4]}) finds it again."
           bar_item.bar2 = box
         else:
@@ -328,7 +333,7 @@ class StateBuilder:
         # if id == 119:
         #   print("id=119, most_cls", most_cls)
         if cls != most_cls:
-          print(f"Warning(state): (time={self.time}) bars and body (id={item.body[-4]}) don't have same class, bar class={idx2unit[int(most_cls)]}, body class={idx2unit[int(cls)]}")
+          self._log_warning(f"Warning(state): (time={self.time}) bars and body (id={item.body[-4]}) don't have same class, bar class={idx2unit[int(most_cls)]}, body class={idx2unit[int(cls)]}")
           item.body[-2] = most_cls
 
   def update(self, info: dict, deploy_cards: set):
@@ -402,6 +407,7 @@ class BarItem:
     self.body, self.bar2xywht, self.bar_history = body, state.bar2xywht, state.bar_history
     self.bel_memory, self.cls_memory, self.time = state.bel_memory, state.cls_memory, state.time
     self.img = state.img
+    self._log_warning = state._log_warning
     self.bars = [self.bar_level, self.bar1, self.bar2]
     self.bel, self.bel_cnt = None, 0
     for i, bar in enumerate(self.bars + [body]):
@@ -410,7 +416,7 @@ class BarItem:
         cnt = max(self.bel_memory[int(bar[-4])].values())
         if self.bel is not None:
           if self.bel != bel:
-            print(f"Warning(state): (time={self.time}) bars (id={bar[-4]}) don't have same belong")
+            self._log_warning(f"Warning(state): (time={self.time}) bars (id={bar[-4]}) don't have same belong")
             if cnt > self.bel_cnt:
               self.bel = bel
               self.bel_cnt = cnt
@@ -418,7 +424,7 @@ class BarItem:
           self.bel = bel
           self.bel_cnt = cnt
     if self.bel is None:
-      print(f"Warning(state): Only build BarItem by bar2 (id={int(self.bar2[-4])})")
+      self._log_warning(f"Warning(state): Only build BarItem by bar2 (id={int(self.bar2[-4])})")
     # assert self.bel is not None, "The belong of BarItem is None"
   
   def debug(self, info):
@@ -491,7 +497,7 @@ class BarItem:
       # info['body'] = xyxy
       bel = int(self.body[-1])
       if bel != self.bel:
-        print(f"Warning(state): (time={self.time}) bars and body (id={self.body[-4]}) don't have same belong")
+        self._log_warning(f"Warning(state): (time={self.time}) bars and body (id={self.body[-4]}) don't have same belong")
         counter = self.bel_memory[int(self.body[-4])]
         if len(counter):
           cnt = max(counter.values())

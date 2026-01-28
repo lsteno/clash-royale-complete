@@ -46,6 +46,14 @@ if "XLA_FLAGS" not in os.environ:
 elif _xla_flag not in os.environ["XLA_FLAGS"]:
     os.environ["XLA_FLAGS"] = f"{os.environ['XLA_FLAGS']} {_xla_flag}"
 
+# Enable persistent JAX compilation cache to avoid recompiling after restarts.
+# Users can override these via environment variables.
+os.environ.setdefault("JAX_COMPILATION_CACHE", "1")
+if "JAX_COMPILATION_CACHE_DIR" not in os.environ:
+    _cache_dir = REPO_ROOT / ".jax_compilation_cache"
+    os.environ["JAX_COMPILATION_CACHE_DIR"] = str(_cache_dir)
+    _cache_dir.mkdir(parents=True, exist_ok=True)
+
 # Import JAX first to ensure proper CUDA initialization
 import jax
 _jax_devices = jax.devices()
@@ -76,17 +84,17 @@ CLASH_ROYALE_CONFIG = {
 
     # Optional pixel-mode overrides (defaults for CLI toggles)
     'pixels': False,
-    'pixel_height': 192,
-    'pixel_width': 256,
+    'pixel_height': 256,  # Portrait mode (taller than wide)
+    'pixel_width': 128,
     
-    # Use smaller batch for single-env training
-    'batch_size': 8,
-    'batch_length': 32,
-    'report_length': 16,
+    # Logger outputs
+    'logger': {
+        'outputs': ['jsonl', 'scope'],
+    },
     
-    # Replay buffer sized for our observation size (8640 floats per obs)
+    # Replay buffer defaults (mode_overrides may further tune these)
     'replay': {
-        'size': 500_000,  # ~500K transitions, ~17GB at full capacity
+        'size': 150_000,  # ~150K transitions, sized for ~180k training runs
         'online': True,
         'chunksize': 512,
     },
@@ -103,32 +111,23 @@ CLASH_ROYALE_CONFIG = {
         'debug': True,  # Enable detailed logging
     },
     
-    # JAX settings - will be overridden by CLI for CPU debugging
+    # JAX settings - will be overridden by mode_overrides/CLI
     'jax': {
         'platform': 'cuda',
         'prealloc': True,
     },
     
-    # Agent architecture for vector observations (not images)
+    # Agent architecture - encoder/decoder type set by mode_overrides
+    # NOTE: Do NOT override enc/dec units here - let size100m wildcards apply
+    # to ensure parity between simple (state) and cnn (pixel) encoders.
     'agent': {
-        # Encoder for our flattened (8640,) vector input
+        # Enable symlog for simple encoder (helps with varied observation scales)
         'enc': {
-            'typ': 'simple',
             'simple': {
-                'layers': 3,
-                'units': 512,
-                'symlog': True,  # Symlog normalization helps with varied scales
+                'symlog': True,
             },
         },
-        # Decoder matching encoder
-        'dec': {
-            'typ': 'simple', 
-            'simple': {
-                'layers': 3,
-                'units': 512,
-            },
-        },
-        # RSSM sized ~50M parameter preset
+        # RSSM sized ~50M parameter preset (same for both pixel/state modes)
         'dyn': {
             'typ': 'rssm',
             'rssm': {
@@ -243,17 +242,38 @@ def load_config(train_cfg: TrainConfig, remaining_args: list[str]) -> elements.C
     cli_overrides['seed'] = train_cfg.seed
     
     config = config.update(cli_overrides)
+
+    # Apply observation-mode-specific settings for Clash Royale
+    # Use consistent batch settings for fair comparison between modes
+    mode_overrides = {
+        'replay.size': 150_000,
+        'replay.chunksize': 512,
+        'batch_size': 8,
+        'batch_length': 32,
+        'report_length': 16,
+        'run.train_ratio': 64.0,
+        'jax.prealloc': False,
+    }
+    # Respect user overrides passed via CLI where applicable
+    if train_cfg.batch_size is not None:
+        mode_overrides.pop('batch_size', None)
+    if train_cfg.train_ratio is not None:
+        mode_overrides.pop('run.train_ratio', None)
+
+    if train_cfg.pixels:
+        # CNN encoder/decoder for pixel observations
+        mode_overrides['agent.enc.typ'] = 'cnn'
+        mode_overrides['agent.dec.typ'] = 'cnn'
+    else:
+        # MLP encoder/decoder for extracted state observations
+        mode_overrides['agent.enc.typ'] = 'simple'
+        mode_overrides['agent.dec.typ'] = 'simple'
+
+    config = config.update(mode_overrides)
     
     # Parse any remaining command-line flags as config overrides
     if remaining_args:
         config = elements.Flags(config).parse(remaining_args)
-
-    # If pixel observations are requested, switch encoder/decoder to CNN mode
-    if train_cfg.pixels:
-        config = config.update({
-            'agent.enc.typ': 'cnn',
-            'agent.dec.typ': 'cnn',
-        })
 
     # Add timestamp to logdir if not already present
     config = config.update(logdir=(

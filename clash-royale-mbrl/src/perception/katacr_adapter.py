@@ -98,8 +98,8 @@ class SimplifiedStateBuilder:
         'cards': [(300, 2050, 400, 2250), (500, 2050, 600, 2250),
                   (700, 2050, 800, 2250), (900, 2050, 1000, 2250)],
         'arena': (22, 580, 1058, 1850),
-        # Shifted time crop 40px down and 15px right (capture-region 1,38,494,1074)
-        'time': (465, 90, 645, 160),
+        # Shifted time crop 70px down and 15px right (capture-region 1,38,494,1074)
+        'time': (465, 120, 645, 190),
         'our_tower_hp': [(100, 1650, 250, 1750), (830, 1650, 980, 1750), (450, 1750, 630, 1850)],
         'enemy_tower_hp': [(100, 650, 250, 750), (830, 650, 980, 750), (450, 550, 630, 650)],
     }
