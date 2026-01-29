@@ -8,7 +8,9 @@ implementations, with a focus on the **PyTorch DreamerV3** in
 
 We study model-based reinforcement learning for **Clash Royale**, a real-time strategy game with partial observability, long-horizon planning, and tight reaction constraints. The repository contains an end-to-end training stack built around **DreamerV3**, including a semantic UI state extractor, a pixel-based baseline, and automated training/evaluation against random and built-in opponents. In our experiments, agents learn basic strategy (≈60% win rate vs. random opponents with sparse rewards), while training against stronger opponents with dense rewards remains unstable and yields negative returns. We observe that noisy semantic extraction degrades planning, whereas pixel-based learning is more robust but substantially more expensive. Limited interaction speed (~1.5 FPS) and noisy credit assignment constrain performance, highlighting the need for better state representations, faster data collection, and improved reward design.
 
-![Dreamer imagined rollout loop](clash-royale-mbrl/images/Untitled.gif)
+<p align="center">
+  <img src="clash-royale-mbrl/images/Untitled.gif" alt="Dreamer imagined rollout loop" width="60%" />
+</p>
 
 
 ## How Dreamer learns
